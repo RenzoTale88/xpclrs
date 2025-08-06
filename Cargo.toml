@@ -1,0 +1,19 @@
+[package]
+name = "xpclr"
+version = "0.1.0"
+authors = ["Andrea Talenti"]
+edition = "2021"
+license = "MIT"
+repository = "https://github.com/RenzoTale88/rust-xpclr"
+readme = "README.md"
+keywords = ["genome", "bioinformatics", "sequencing"]
+categories = ["bioinformatics"]
+
+[dependencies]
+anyhow = "1.0.98"
+clap = "4.5.42"
+itertools = "0.14.0"
+niffler = "2.0.0"
+rust-htslib = "0.50.0"
+rustc-hash = "2.1.1"
+statistical = "1.0.0"
