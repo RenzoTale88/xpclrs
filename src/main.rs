@@ -129,6 +129,15 @@ fn main() {
                 .required(false)
                 .help("Key for genetic position in variants table of hdf5/VCF"),
         )
+        .arg(
+            Arg::new("NTHREADS")
+                .short('t')
+                .long("threads")
+                .required(false)
+                .default_value("1")
+                .value_parser(value_parser!(usize))
+                .help("Number of threads to use"),
+        )
         .get_matches();
 
     // Get the VCF
@@ -150,6 +159,9 @@ fn main() {
     let _out_path = matches
         .get_one::<String>("OUT")
         .expect("Output file is required");
+    let n_threads = matches
+        .get_one::<usize>("NTHREADS")
+        .expect("Number of threads invalid");
 
     // Get the sample lists
     let sample_a = matches
@@ -181,8 +193,16 @@ fn main() {
         std::process::exit(1);
     }
 
+    // Define thread pool
+    let pool = rayon::ThreadPoolBuilder::new().num_threads(*n_threads).build().unwrap();
+
     // Demo
     let p1: Vec<f32> = vec![0.001, 0.0002, 0.01, 0.4, 0.9];
-    let pd = pdens_integral(&p1, 1, 100, 0.00528, 0.2, 0.7).expect("Cannot compute PDF.");
-    println!("{:?}", pd);
+    pool.install(|| {
+        // Code here runs using at most num_threads threads
+        // For example, a parallel iterator:
+        let pd = pdens_integral(&p1, 1, 100, 0.00528, 0.2, 0.7).expect("Cannot compute PDF.");
+        println!("{:?}", pd);
+    });
+
 }

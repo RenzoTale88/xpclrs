@@ -2,6 +2,7 @@
 This module provides the functions required to compute the XP-CLR.
 */
 use anyhow::Result;
+use rayon::prelude::*;
 use statistical::mean;
 use statrs::distribution::{Binomial, Discrete};
 use std::f32::consts::PI;
@@ -92,7 +93,7 @@ pub fn omega_est(q1: &[f32], q2: &[f32]) -> Result<f32> {
     };
     // Compute the omega
     let w = mean(
-        &q1.iter()
+        &q1.par_iter()
             .zip(q2)
             .map(|(p, q)| ((p - q) * (p - q)) / (q * (1f32 - q)))
             .collect::<Vec<f32>>(),
@@ -141,11 +142,11 @@ fn compute_pdens(p1: &[f32], c: f32, p2: f32, var: f32) -> Result<Vec<f32>> {
 
     // left hand side
     let b_term_l = &p1[0..left]
-        .iter()
+        .par_iter()
         .map(|i| (c - i) / (c.powf(2f32)))
         .collect::<Vec<f32>>();
     let c_term_l = &p1[0..left]
-        .iter()
+        .par_iter()
         .map(|i| (i - (c * p2)).powf(2f32) / (2f32 * c.powf(2f32) * var))
         .collect::<Vec<f32>>();
     let l_slice = &mut r[..left];
@@ -155,11 +156,11 @@ fn compute_pdens(p1: &[f32], c: f32, p2: f32, var: f32) -> Result<Vec<f32>> {
 
     // Repeat for right term
     let b_term_r = &p1[right..]
-        .iter()
+        .par_iter()
         .map(|i| (c - i) / (c.powf(2f32)))
         .collect::<Vec<f32>>();
     let c_term_r = &p1[right..]
-        .iter()
+        .par_iter()
         .map(|i| (i - (c * p2)).powf(2f32) / (2f32 * c.powf(2f32) * var))
         .collect::<Vec<f32>>();
     let r_slice = &mut r[right..];
@@ -176,7 +177,7 @@ pub fn pdens_integral(p1: &[f32], xj: u64, nj: u64, c: f32, p2: f32, var: f32) -
 
     // Apply binomial function
     let binomials = p1
-        .iter()
+        .par_iter()
         .zip(dens)
         .map(|(p, d)| d * Binomial::new(*p as f64, nj).expect("Can't compute binomial distribution").pmf(xj) as f32)
         .collect::<Vec<f32>>();
@@ -185,12 +186,8 @@ pub fn pdens_integral(p1: &[f32], xj: u64, nj: u64, c: f32, p2: f32, var: f32) -
 
 /*
 def pdf_integral(p1, data):
-
     # calculate pdens for range of p1
     xj, nj, c, p2, var = data
-
     dens = pdf(p1, data=data[2:])
-
     return dens * binom.pmf(xj, nj, p=p1)
-
 */
