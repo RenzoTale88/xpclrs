@@ -3,6 +3,7 @@ This module provides the functions required to compute the XP-CLR.
 */
 use anyhow::Result;
 use statistical::mean;
+use statrs::distribution::{Binomial, Discrete};
 use std::f32::consts::PI;
 
 // Drafted bisect left and right
@@ -126,7 +127,7 @@ pub fn compute_c(
 
 // given a set of potential p1s, we wish to know the probability density at each
 // value of p1.
-pub fn pdf(p1: &[f32], c: f32, p2: f32, var: f32) -> Result<Vec<f32>> {
+fn compute_pdens(p1: &[f32], c: f32, p2: f32, var: f32) -> Result<Vec<f32>> {
     // First term
     let a_term: f32 = (2f32 * PI * var).sqrt().powf(-1.0);
 
@@ -169,19 +170,27 @@ pub fn pdf(p1: &[f32], c: f32, p2: f32, var: f32) -> Result<Vec<f32>> {
     Ok(r)
 }
 
+pub fn pdens_integral(p1: &[f32], xj: u64, nj: u64, c: f32, p2: f32, var: f32) -> Result<Vec<f32>> {
+    // Compute dens first
+    let dens = compute_pdens(p1, c, p2, var).expect("Can't compute dens");
+
+    // Apply binomial function
+    let binomials = p1
+        .iter()
+        .zip(dens)
+        .map(|(p, d)| d * Binomial::new(*p as f64, nj).expect("Can't compute binomial distribution").pmf(xj) as f32)
+        .collect::<Vec<f32>>();
+    Ok(binomials)
+}
+
 /*
-def pdf(p1, data):
+def pdf_integral(p1, data):
 
-    """
-    param p1: x values for which we want pdens
-    :param data is an array of c, p2, var
-    :return:
-    """
+    # calculate pdens for range of p1
+    xj, nj, c, p2, var = data
 
-    # right hand side
-    b_term_r = (p1[ixr:] + c - 1)/(c**2)
-    c_term_r = ((p1[ixr:] + c - 1 - (c*p2))**2) / (2*(c**2)*var)
-    r[ixr:] += a_term * b_term_r * np.exp(-c_term_r)
+    dens = pdf(p1, data=data[2:])
 
-    return r
+    return dens * binom.pmf(xj, nj, p=p1)
+
 */

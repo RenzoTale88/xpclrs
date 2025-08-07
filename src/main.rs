@@ -3,7 +3,7 @@ use rust_htslib::bcf::*;
 use std::path::Path;
 use xpclr::{
     io::{read_file, read_xcf, XcfReader},
-    methods::{pdf},
+    methods::{pdens_integral},
 };
 
 /*
@@ -183,6 +183,6 @@ fn main() {
 
     // Demo
     let p1: Vec<f32> = vec![0.001, 0.0002, 0.01, 0.4, 0.9];
-    let pd = pdf(&p1, 0.00528, 0.2, 0.7).expect("Cannot compute PDF.");
+    let pd = pdens_integral(&p1, 1, 100, 0.00528, 0.2, 0.7).expect("Cannot compute PDF.");
     println!("{:?}", pd);
 }
