@@ -1,5 +1,10 @@
 use clap::{value_parser, Arg, Command};
-use xpclr::read_file;
+use rust_htslib::bcf::*;
+use std::path::Path;
+use xpclr::{
+    io::{read_file, read_xcf, XcfReader},
+    methods::{pdf},
+};
 
 /*
  --format FORMAT, -F FORMAT
@@ -126,13 +131,27 @@ fn main() {
         )
         .get_matches();
 
-    // Get the matches
-    let vcf_path = matches
+    // Get the VCF
+    let xcf_path = matches
         .get_one::<String>("VCF")
         .expect("VCF file is required");
-    let out_path = matches
+    let tbi_path = format!("{xcf_path}.tbi");
+    let csi_path = format!("{xcf_path}.csi");
+    let has_index = Path::exists(Path::new(&tbi_path)) || Path::exists(Path::new(&csi_path));
+    let input_xcf = read_xcf(xcf_path, has_index).expect("Failed to read VCF file");
+    let xcf_header = match &input_xcf {
+        XcfReader::Indexed(reader) => reader.header(),
+        XcfReader::Readthrough(reader) => reader.header(),
+    };
+    let sample_list = xcf_header.samples();
+    println!("Samples in VCF: {}", xcf_header.sample_count());
+
+    // Get the output path
+    let _out_path = matches
         .get_one::<String>("OUT")
         .expect("Output file is required");
+
+    // Get the sample lists
     let sample_a = matches
         .get_one::<String>("SAMPLES_A")
         .expect("Samples A file is required");
@@ -141,17 +160,29 @@ fn main() {
         .expect("Samples B file is required");
 
     // Load sample lists as an u8 array
-    let mut samples_a = read_file(sample_a)
+    let samples_a = read_file(sample_a)
         .expect("Invalid file for samples A")
         .map(|s| s.expect("Failed to read sample A line"))
+        .filter(|s| sample_list.contains(&s.as_bytes()))
         .collect::<Vec<String>>();
-    let mut samples_b = read_file(sample_b)
+    let samples_b = read_file(sample_b)
         .expect("Invalid file for samples B")
         .map(|s| s.expect("Failed to read sample B line"))
+        .filter(|s| sample_list.contains(&s.as_bytes()))
         .collect::<Vec<String>>();
 
-    println!("Samples B: {samples_a:?}");
-    println!("Samples B: {samples_b:?}");
-    // Final printing
-    println!("Hello, world!");
+    // Print number of samples
+    println!("Samples A: {}", samples_a.len());
+    println!("Samples B: {}", samples_b.len());
+
+    // Dies if no samples are retained
+    if samples_a.is_empty() || samples_b.is_empty() {
+        eprintln!("No samples found in the lists.");
+        std::process::exit(1);
+    }
+
+    // Demo
+    let p1: Vec<f32> = vec![0.001, 0.0002, 0.01, 0.4, 0.9];
+    let pd = pdf(&p1, 0.00528, 0.2, 0.7).expect("Cannot compute PDF.");
+    println!("{:?}", pd);
 }
