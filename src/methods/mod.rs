@@ -2,6 +2,7 @@
 This module provides the functions required to compute the XP-CLR.
 */
 use anyhow::Result;
+use quad_rs::{EvaluationError, Integrable, Integrator};
 use rayon::prelude::*;
 use statistical::mean;
 use statrs::distribution::{Binomial, Discrete};
@@ -126,8 +127,7 @@ pub fn compute_c(
     }
 }
 
-// given a set of potential p1s, we wish to know the probability density at each
-// value of p1.
+// Standard function
 fn compute_pdens(p1: &[f32], c: f32, p2: f32, var: f32) -> Result<Vec<f32>> {
     // First term
     let a_term: f32 = (2f32 * PI * var).sqrt().powf(-1.0);
@@ -171,7 +171,7 @@ fn compute_pdens(p1: &[f32], c: f32, p2: f32, var: f32) -> Result<Vec<f32>> {
     Ok(r)
 }
 
-pub fn pdens_integral(p1: &[f32], xj: u64, nj: u64, c: f32, p2: f32, var: f32) -> Result<Vec<f32>> {
+pub fn pdens_binomial(p1: &[f32], xj: u64, nj: u64, c: f32, p2: f32, var: f32) -> Result<Vec<f32>> {
     // Compute dens first
     let dens = compute_pdens(p1, c, p2, var).expect("Can't compute dens");
 
@@ -184,10 +184,52 @@ pub fn pdens_integral(p1: &[f32], xj: u64, nj: u64, c: f32, p2: f32, var: f32) -
     Ok(binomials)
 }
 
+
+pub fn compute_chen_likelihood(n_alt_obs: u64, tot_alt_obs: u64, c: f32, p2: f32, var: f32) -> Result<f32> {
+    Ok(0.0)
+}
+
 /*
-def pdf_integral(p1, data):
-    # calculate pdens for range of p1
-    xj, nj, c, p2, var = data
-    dens = pdf(p1, data=data[2:])
-    return dens * binom.pmf(xj, nj, p=p1)
+# This is recoded from the implementation of xpclr. I do not think it represents
+# what is discussed in the paper. Here we take the integral of eq 5 in the paper
+# then take the ratio of it to eq 5 without the binomial component.
+# additionally they neglect the probability of p1 being 0 or 1, I presume to
+# allow the romberg integration to converge ok.
+# This calculates the likelihood of a given SNP
+@lru_cache(maxsize=2**16)
+def chen_likelihood(values):
+
+    """
+    :param values: is an array of nobserved alt alleles, total obs alleles, c,
+    p2freq, and var.
+    :return: The likelihood ratio of the two likelihoods.
+    """
+
+    with warnings.catch_warnings(record=True) as w:
+
+        # Cause all warnings to always be triggered.
+        warnings.simplefilter("always")
+
+        # These 2 function calls are major speed bottlenecks.
+        # to do: http://docs.scipy.org/doc/scipy/reference/tutorial/integrate
+        # .html#faster-integration-using-ctypes
+        i_likl = quad(pdf_integral, a=0.001, b=0.999, args=(values,),
+                      epsrel=0.001, epsabs=0, full_output=1)
+
+        i_base = quad(pdf, a=0.001, b=0.999, args=(values[2:],),
+                      epsrel=0.001, epsabs=0, full_output=1)
+
+        if w:
+            logger.warning(w[-1].message, i_likl, i_base)
+
+    like_i, like_b = i_likl[0], i_base[0]
+
+    if like_i == 0.0:
+        ratio = -1800
+    elif like_b == 0.0:
+        ratio = -1800
+    else:
+        ratio = np.log(like_i) - np.log(like_b)
+
+    return ratio
 */

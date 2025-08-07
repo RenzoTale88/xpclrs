@@ -12,6 +12,7 @@ categories = ["bioinformatics"]
 [dependencies]
 anyhow = "1.0.98"
 clap = "4.5.42"
+quad-rs = "0.2.2"
 itertools = "0.14.0"
 niffler = "2.0.0"
 rayon = "1.10.0"

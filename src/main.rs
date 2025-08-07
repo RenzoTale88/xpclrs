@@ -3,7 +3,7 @@ use rust_htslib::bcf::*;
 use std::path::Path;
 use xpclr::{
     io::{read_file, read_xcf, XcfReader},
-    methods::{pdens_integral},
+    methods::{pdens_binomial},
 };
 
 /*
@@ -201,7 +201,7 @@ fn main() {
     pool.install(|| {
         // Code here runs using at most num_threads threads
         // For example, a parallel iterator:
-        let pd = pdens_integral(&p1, 1, 100, 0.00528, 0.2, 0.7).expect("Cannot compute PDF.");
+        let pd = pdens_binomial(&p1, 1, 100, 0.00528, 0.2, 0.7).expect("Cannot compute PDF.");
         println!("{:?}", pd);
     });
 
