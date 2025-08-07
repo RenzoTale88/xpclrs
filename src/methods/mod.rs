@@ -179,14 +179,157 @@ pub fn pdens_binomial(p1: &[f32], xj: u64, nj: u64, c: f32, p2: f32, var: f32) -
     let binomials = p1
         .par_iter()
         .zip(dens)
-        .map(|(p, d)| d * Binomial::new(*p as f64, nj).expect("Can't compute binomial distribution").pmf(xj) as f32)
+        .map(|(p, d)| {
+            d * Binomial::new(*p as f64, nj)
+                .expect("Can't compute binomial distribution")
+                .pmf(xj) as f32
+        })
         .collect::<Vec<f32>>();
     Ok(binomials)
 }
 
+struct Pdensity {
+    c: f32,
+    p2: f32,
+    var: f32,
+}
 
-pub fn compute_chen_likelihood(n_alt_obs: u64, tot_alt_obs: u64, c: f32, p2: f32, var: f32) -> Result<f32> {
-    Ok(0.0)
+impl Integrable for Pdensity {
+    type Input = f32;
+    type Output = f32;
+
+    fn integrand(&self, input: &Self::Input) -> Result<Self::Output, EvaluationError<Self::Input>> {
+        let c = self.c;
+        let p2 = self.p2;
+        let var = self.var;
+
+        // Compute p_density component at this input point "input"
+        // We rewrite compute_pdens logic for a single scalar input
+        let p1_val = *input;
+
+        // a_term = 1 / sqrt(2 * PI * var)
+        let a_term = 1.0 / (2.0 * PI * var).sqrt();
+
+        // decide which branch depending on p1_val in relation to c and 1-c
+        // You may adapt the bisect logic or simply partition manually here for scalar input
+
+        // For example, approximate the b_term and c_term as per formulas:
+        let (b_term, c_term) = if p1_val < c {
+                let b = (c - p1_val) / (c * c);
+                let c_t = (p1_val - c * p2).powi(2) / (2.0 * c.powi(2) * var);
+                (b, c_t)
+            } else if p1_val > 1.0 - c {
+                let b = (p1_val + c - 1.0) / (c * c);
+                let c_t = (p1_val + c - 1.0 - c * p2).powi(2) / (2.0 * c.powi(2) * var);
+                (b, c_t)
+            } else {
+                // Between c and 1 - c, density is zero (or negligible)
+                return Ok(0.0);
+            };
+
+        // Compute Gaussian-like term
+        let density = a_term * b_term * (-c_term).exp();
+
+        Ok(density)
+    }
+}
+
+struct PdensityBinom {
+    c: f32,
+    p2: f32,
+    var: f32,
+    xj: u64,
+    nj: u64,
+}
+
+impl Integrable for PdensityBinom {
+    type Input = f32;
+    type Output = f32;
+
+    fn integrand(&self, input: &Self::Input) -> Result<Self::Output, EvaluationError<Self::Input>> {
+        let c = self.c;
+        let p2 = self.p2;
+        let var = self.var;
+        let xj = self.xj;
+        let nj = self.nj;
+
+        // Compute p_density component at this input point "input"
+        // We rewrite compute_pdens logic for a single scalar input
+        let p1_val = *input;
+
+        // a_term = 1 / sqrt(2 * PI * var)
+        let a_term = 1.0 / (2.0 * PI * var).sqrt();
+
+        // decide which branch depending on p1_val in relation to c and 1-c
+        // You may adapt the bisect logic or simply partition manually here for scalar input
+
+        // For example, approximate the b_term and c_term as per formulas:
+        let (b_term, c_term) = if p1_val < c {
+                let b = (c - p1_val) / (c * c);
+                let c_t = (p1_val - c * p2).powi(2) / (2.0 * c.powi(2) * var);
+                (b, c_t)
+            } else if p1_val > 1.0 - c {
+                let b = (p1_val + c - 1.0) / (c * c);
+                let c_t = (p1_val + c - 1.0 - c * p2).powi(2) / (2.0 * c.powi(2) * var);
+                (b, c_t)
+            } else {
+                // Between c and 1 - c, density is zero (or negligible)
+                return Ok(0.0);
+            };
+
+        // Compute Gaussian-like term
+        let density = a_term * b_term * (-c_term).exp();
+
+        // Apply binomial pmf weight
+        // Use statrs crate Binomial for pmf
+        use statrs::distribution::Binomial;
+        let binom = Binomial::new(p1_val as f64, nj).expect("Cannot compute binomial");
+        let pmf_val = binom.pmf(xj) as f32;
+
+        let result = density * pmf_val;
+
+        Ok(result)
+    }
+}
+
+pub fn compute_chen_likelihood(
+    n_alt_obs: u64,
+    tot_alt_obs: u64,
+    c: f32,
+    p2: f32,
+    var: f32,
+) -> Result<f32> {
+    // Default integrator
+    let integrator = Integrator::default()
+        .relative_tolerance(0.001);
+
+    // Prepare integrands
+    let integrand_pdf = Pdensity { c, p2, var };
+    let integrand_bin = PdensityBinom {
+        c,
+        p2,
+        var,
+        xj: n_alt_obs,
+        nj: tot_alt_obs,
+    };
+
+    // Integration range on p1 values, for example [0.0, 1.0]
+    let like_b  = integrator
+        .integrate(integrand_pdf, 0.001f32..0.999)
+        .expect("Invalid integral")
+        .result.result.expect("Not a valid number");
+    let like_i = integrator
+        .integrate(integrand_bin, 0.001f32..0.999)
+        .expect("Invalid integral")
+        .result.result.expect("Not a valid number");
+
+    // Return the right value
+    let ratio = match (like_i, like_b) {
+        (0.0, _) => -1800f32,
+        (_, 0.0) => -1800f32,
+        (_, _) => like_i.ln() - like_b.ln()
+    };
+    Ok(ratio)
 }
 
 /*

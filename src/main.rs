@@ -3,7 +3,7 @@ use rust_htslib::bcf::*;
 use std::path::Path;
 use xpclr::{
     io::{read_file, read_xcf, XcfReader},
-    methods::{pdens_binomial},
+    methods::{compute_chen_likelihood},
 };
 
 /*
@@ -201,8 +201,8 @@ fn main() {
     pool.install(|| {
         // Code here runs using at most num_threads threads
         // For example, a parallel iterator:
-        let pd = pdens_binomial(&p1, 1, 100, 0.00528, 0.2, 0.7).expect("Cannot compute PDF.");
-        println!("{:?}", pd);
+        let likelihood = compute_chen_likelihood(1, 100, 0.00528, 0.2, 0.7).expect("Cannot compute likelihood.");
+        println!("Chen likelihood: {likelihood}");
     });
 
 }
