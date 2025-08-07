@@ -3,7 +3,6 @@ use rust_htslib::bcf::*;
 use std::path::Path;
 use xpclr::{
     io::{read_file, read_xcf, XcfReader},
-    methods::{compute_harding_likelihood},
 };
 
 /*
@@ -201,8 +200,7 @@ fn main() {
     pool.install(|| {
         // Code here runs using at most num_threads threads
         // For example, a parallel iterator:
-        let likelihood = compute_harding_likelihood(1, 100, 0.00528, 0.2, 0.7).expect("Cannot compute likelihood.");
-        println!("Harding likelihood: {likelihood}");
+        println!("Harding likelihood: {p1:?}");
     });
 
 }

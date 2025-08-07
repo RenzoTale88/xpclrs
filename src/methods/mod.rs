@@ -8,7 +8,7 @@ use scirs2_integrate::romberg::{romberg, RombergOptions};
 use statistical::mean;
 use statrs::distribution::{Binomial, Discrete};
 use std::f32::{
-    consts::PI
+    consts::PI, INFINITY
 };
 
 // Drafted bisect left and right
@@ -331,9 +331,9 @@ impl Integrable for PdensityBinom {
     }
 }
 
-pub fn compute_chen_likelihood(
-    n_alt_obs: u64,
-    tot_alt_obs: u64,
+fn compute_chen_likelihood(
+    xj: u64,
+    nj: u64,
     c: f32,
     p2: f32,
     var: f32,
@@ -348,8 +348,8 @@ pub fn compute_chen_likelihood(
         c,
         p2,
         var,
-        xj: n_alt_obs,
-        nj: tot_alt_obs,
+        xj,
+        nj,
     };
 
     // Integration range on p1 values, for example [0.0, 1.0]
@@ -372,7 +372,7 @@ pub fn compute_chen_likelihood(
 }
 
 // Second likelihood method
-pub fn compute_harding_likelihood(
+fn compute_romberg_likelihood(
     xj: u64,
     nj: u64,
     c: f32,
@@ -405,26 +405,49 @@ pub fn compute_harding_likelihood(
     }
 }
 
+// Compute composite likelihood
+pub fn compute_complikelihood(
+    sc: f32,
+    xs: &[u64],
+    ns: &[u64],
+    rds: &[f32],
+    p2freqs: &[f32],
+    weights: &[f32],
+    omegas: &[f32],
+    method: Option<u8>,
+) -> Result<f32> {
+    let method = method.unwrap_or(0);
+    if sc >= 1.0 || sc < 0.0 {
+        Ok(INFINITY)
+    } else {
+        let marginall = xs
+            .par_iter()
+            .zip(ns)
+            .zip(rds)
+            .zip(p2freqs)
+            .zip(weights)
+            .zip(omegas)
+            .map(
+                |(((((xj, nj), r), p2), weight), omega)| {
+                    // compute the variance
+                    let var = var_estimate(*omega, *p2).expect("Cannot compute variance");
+                    // Compute C
+                    let c = compute_c(*r, sc, None, None, None).expect("Cannot compute C");
+                    // Compute likelihood
+                    let cl = match method {
+                        0 => compute_chen_likelihood(*xj, *nj, c, *p2, var),
+                        1 => compute_romberg_likelihood(*xj, *nj, c, *p2, var),
+                        _ => compute_chen_likelihood(*xj, *nj, c, *p2, var)
+                    }.expect("Cannot compute the likelihood");
+                    // Return the weighted margin
+                    cl * *weight
+            }).collect::<Vec<f32>>();
+        // final value
+        let ml: f32 = marginall.iter().sum();
+        Ok(-ml)
+    }
+}
+
+
 /*
-def harding_likelihood(values):
-
-    logger.warning("Not to be used as Romberg does not work on non cont diffs")
-    with warnings.catch_warnings(record=True) as w:
-
-        # Cause all warnings to always be triggered.
-        warnings.simplefilter("always")
-
-        cl = np.log(romberg(pdf_integral, a=0., b=1., args=(values,),
-                            divmax=50, vec_func=True, tol=1.48e-6))
-
-        if np.isnan(cl) or cl == -np.inf:
-            cl = -1800
-
-        if w:
-            logger.warning(w[-1].message)
-
-    return cl
-
-calculate_likelihood = chen_likelihood
-
 */
