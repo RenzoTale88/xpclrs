@@ -4,9 +4,12 @@ This module provides the functions required to compute the XP-CLR.
 use anyhow::Result;
 use quad_rs::{EvaluationError, Integrable, Integrator};
 use rayon::prelude::*;
+use scirs2_integrate::romberg::{romberg, RombergOptions};
 use statistical::mean;
 use statrs::distribution::{Binomial, Discrete};
-use std::f32::consts::PI;
+use std::f32::{
+    consts::PI
+};
 
 // Drafted bisect left and right
 pub struct Bisector<'a, T> {
@@ -174,18 +177,54 @@ fn compute_pdens(p1: &[f32], c: f32, p2: f32, var: f32) -> Result<Vec<f32>> {
 pub fn pdens_binomial(p1: &[f32], xj: u64, nj: u64, c: f32, p2: f32, var: f32) -> Result<Vec<f32>> {
     // Compute dens first
     let dens = compute_pdens(p1, c, p2, var).expect("Can't compute dens");
-
+    
     // Apply binomial function
     let binomials = p1
-        .par_iter()
-        .zip(dens)
-        .map(|(p, d)| {
-            d * Binomial::new(*p as f64, nj)
-                .expect("Can't compute binomial distribution")
-                .pmf(xj) as f32
-        })
-        .collect::<Vec<f32>>();
-    Ok(binomials)
+    .par_iter()
+    .zip(dens)
+    .map(|(p, d)| {
+        d * Binomial::new(*p as f64, nj)
+        .expect("Can't compute binomial distribution")
+        .pmf(xj) as f32
+    })
+    .collect::<Vec<f32>>();
+Ok(binomials)
+}
+
+pub fn pden_binomial(p1_val: f32, xj: u64, nj: u64, c: f32, p2: f32, var: f32) -> Result<f32> {
+    // a_term = 1 / sqrt(2 * PI * var)
+    let a_term = 1.0 / (2.0 * PI * var).sqrt();
+
+    // decide which branch depending on p1_val in relation to c and 1-c
+    // You may adapt the bisect logic or simply partition manually here for scalar input
+
+    // For example, approximate the b_term and c_term as per formulas:
+    let (b_term, c_term) = if p1_val < c {
+            let b = (c - p1_val) / (c * c);
+            let c_t = (p1_val - c * p2).powi(2) / (2.0 * c.powi(2) * var);
+            (b, c_t)
+        } else if p1_val > 1.0 - c {
+            let b = (p1_val + c - 1.0) / (c * c);
+            let c_t = (p1_val + c - 1.0 - c * p2).powi(2) / (2.0 * c.powi(2) * var);
+            (b, c_t)
+        } else {
+            // Between c and 1 - c, density is zero (or negligible)
+            return Ok(0.0);
+        };
+
+    // Compute Gaussian-like term
+    let density = a_term * b_term * (-c_term).exp();
+
+    // Apply binomial pmf weight
+    // Use statrs crate Binomial for pmf
+    use statrs::distribution::Binomial;
+    let binom = Binomial::new(p1_val as f64, nj).expect("Cannot compute binomial");
+    let pmf_val = binom.pmf(xj) as f32;
+
+    let result = density * pmf_val;
+
+    Ok(result)
+
 }
 
 struct Pdensity {
@@ -332,47 +371,60 @@ pub fn compute_chen_likelihood(
     Ok(ratio)
 }
 
+// Second likelihood method
+pub fn compute_harding_likelihood(
+    xj: u64,
+    nj: u64,
+    c: f32,
+    p2: f32,
+    var: f32,
+) -> Result<f32> {
+    let options = RombergOptions {
+        max_iters: 50,         // corresponds to divmax in SciPy
+        abs_tol: 1.48e-6,      // absolute tolerance
+        rel_tol: 1.48e-6,      // relative tolerance
+        max_true_dimension: 3, // default
+        min_monte_carlo_samples: 1000, // fallback param
+    };
+    
+
+    // Wrapper to run the function correctly
+    let pdf_integral = |p1_val: f32| {
+        // Use the captured `values` here to compute the integrand at x
+        // For example, you can call your Rust implementation of pdf_integral:
+        pden_binomial(p1_val, xj, nj, c, p2, var).expect("Cannot compute pdensity")
+    };
+
+    // Compute romberg integration
+    let cl = romberg(pdf_integral, 0.0, 1.0, Some(options))?.value.ln();
+    // Return acceptable value
+    if cl.is_finite() {
+        Ok(cl)
+    } else {
+        Ok(-1800f32)
+    }
+}
+
 /*
-# This is recoded from the implementation of xpclr. I do not think it represents
-# what is discussed in the paper. Here we take the integral of eq 5 in the paper
-# then take the ratio of it to eq 5 without the binomial component.
-# additionally they neglect the probability of p1 being 0 or 1, I presume to
-# allow the romberg integration to converge ok.
-# This calculates the likelihood of a given SNP
-@lru_cache(maxsize=2**16)
-def chen_likelihood(values):
+def harding_likelihood(values):
 
-    """
-    :param values: is an array of nobserved alt alleles, total obs alleles, c,
-    p2freq, and var.
-    :return: The likelihood ratio of the two likelihoods.
-    """
-
+    logger.warning("Not to be used as Romberg does not work on non cont diffs")
     with warnings.catch_warnings(record=True) as w:
 
         # Cause all warnings to always be triggered.
         warnings.simplefilter("always")
 
-        # These 2 function calls are major speed bottlenecks.
-        # to do: http://docs.scipy.org/doc/scipy/reference/tutorial/integrate
-        # .html#faster-integration-using-ctypes
-        i_likl = quad(pdf_integral, a=0.001, b=0.999, args=(values,),
-                      epsrel=0.001, epsabs=0, full_output=1)
+        cl = np.log(romberg(pdf_integral, a=0., b=1., args=(values,),
+                            divmax=50, vec_func=True, tol=1.48e-6))
 
-        i_base = quad(pdf, a=0.001, b=0.999, args=(values[2:],),
-                      epsrel=0.001, epsabs=0, full_output=1)
+        if np.isnan(cl) or cl == -np.inf:
+            cl = -1800
 
         if w:
-            logger.warning(w[-1].message, i_likl, i_base)
+            logger.warning(w[-1].message)
 
-    like_i, like_b = i_likl[0], i_base[0]
+    return cl
 
-    if like_i == 0.0:
-        ratio = -1800
-    elif like_b == 0.0:
-        ratio = -1800
-    else:
-        ratio = np.log(like_i) - np.log(like_b)
+calculate_likelihood = chen_likelihood
 
-    return ratio
 */
