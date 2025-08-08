@@ -141,14 +141,8 @@ fn main() {
         .get_one::<String>("CHROM")
         .expect("Invalid chromosome code")
         .to_owned();
-    let start = match matches.get_one::<u64>("START") {
-        Some(&x) => Some(x),
-        None => None
-    };
-    let end = match matches.get_one::<u64>("STOP") {
-        Some(&x) => Some(x),
-        None => None
-    };
+    let start = matches.get_one::<u64>("START").map(|&x| x);
+    let end = matches.get_one::<u64>("STOP").map(|&x| x);
 
     // Get the VCF
     let xcf_path = matches

@@ -91,9 +91,7 @@ fn indexed_xcf(
     start: u64,
     end: Option<u64>,
     _gdistkey: Option<String>,
-) -> Result<(
-    (Vec<i64>, Vec<Vec<Genotype>>, Vec<Vec<Genotype>>)
-)> {
+) -> Result<(Vec<i64>, Vec<Vec<Genotype>>, Vec<Vec<Genotype>>)> {
     println!("Indexed reader.");
     let homref = b"00";
     println!("{homref:?}");
@@ -144,10 +142,10 @@ fn indexed_xcf(
     }).multiunzip();
 
     // Assess everything looks good
-    if (gt1_data.len() != gt2_data.len()){
+    if gt1_data.len() != gt2_data.len() {
         panic!("Inconsistent data")
     };
-    if (positions.len() != gt2_data.len()){
+    if positions.len() != gt2_data.len() {
         panic!("Inconsistent data")
     };
     // Print some info
@@ -223,10 +221,10 @@ fn readthrough_xcf(
         .multiunzip();
 
     // Assess everything looks good
-    if (gt1_data.len() != gt2_data.len()){
+    if gt1_data.len() != gt2_data.len() {
         panic!("Inconsistent data")
     };
-    if (positions.len() != gt2_data.len()){
+    if positions.len() != gt2_data.len() {
         panic!("Inconsistent data")
     };
     // Print some info
