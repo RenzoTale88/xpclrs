@@ -1,5 +1,5 @@
 use clap::{value_parser, Arg, Command};
-use xpclr::io::{process_xcf, read_file};
+use xpclrs::io::{process_xcf, read_file};
 
 /*
  --format FORMAT, -F FORMAT

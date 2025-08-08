@@ -3,6 +3,7 @@ This module provides the I/O functions (e.g. VCF/BCF readers, text readers etc).
 */
 use anyhow::Result;
 use itertools::MultiUnzip;
+use rayon::prelude::*;
 use rust_htslib::bcf::{self, record::Genotype, IndexedReader, Read, Reader};
 use std::{
     collections::HashSet,

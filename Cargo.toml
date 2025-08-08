@@ -1,10 +1,10 @@
 [package]
-name = "xpclr"
+name = "xpclrs"
 version = "0.1.0"
 authors = ["Andrea Talenti"]
 edition = "2021"
 license = "MIT"
-repository = "https://github.com/RenzoTale88/rust-xpclr"
+repository = "https://github.com/RenzoTale88/xpclrs"
 readme = "README.md"
 keywords = ["genome", "bioinformatics", "sequencing"]
 categories = ["bioinformatics"]
