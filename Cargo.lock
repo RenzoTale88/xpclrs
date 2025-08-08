@@ -2190,6 +2190,7 @@ dependencies = [
  "itertools 0.14.0",
  "niffler",
  "quad-rs",
+ "rand 0.9.2",
  "rayon",
  "rust-htslib",
  "rustc-hash 2.1.1",

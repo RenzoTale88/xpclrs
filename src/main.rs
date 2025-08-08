@@ -1,9 +1,5 @@
 use clap::{value_parser, Arg, Command};
-use rust_htslib::bcf::*;
-use std::path::Path;
-use xpclr::{
-    io::{read_file, read_xcf, XcfReader},
-};
+use xpclr::io::{process_xcf, read_file};
 
 /*
  --format FORMAT, -F FORMAT
@@ -98,13 +94,14 @@ fn main() {
                 .long("start")
                 .required(false)
                 .default_value("1")
-                .value_parser(value_parser!(i32))
+                .value_parser(value_parser!(u64))
                 .help("Start position for the sliding windows."),
         )
         .arg(
             Arg::new("STOP")
                 .long("stop")
                 .required(false)
+                .value_parser(value_parser!(u64))
                 .help("Stop position for the sliding windows."),
         )
         .arg(
@@ -112,7 +109,7 @@ fn main() {
                 .long("step")
                 .required(false)
                 .default_value("20000")
-                .value_parser(value_parser!(i32))
+                .value_parser(value_parser!(u64))
                 .help("Step size for the sliding windows."),
         )
         .arg(
@@ -139,20 +136,25 @@ fn main() {
         )
         .get_matches();
 
+    // Fixed parameters
+    let chrom = matches
+        .get_one::<String>("CHROM")
+        .expect("Invalid chromosome code")
+        .to_owned();
+    let start = match matches.get_one::<u64>("START") {
+        Some(&x) => Some(x),
+        None => None
+    };
+    let end = match matches.get_one::<u64>("STOP") {
+        Some(&x) => Some(x),
+        None => None
+    };
+
     // Get the VCF
     let xcf_path = matches
         .get_one::<String>("VCF")
-        .expect("VCF file is required");
-    let tbi_path = format!("{xcf_path}.tbi");
-    let csi_path = format!("{xcf_path}.csi");
-    let has_index = Path::exists(Path::new(&tbi_path)) || Path::exists(Path::new(&csi_path));
-    let input_xcf = read_xcf(xcf_path, has_index).expect("Failed to read VCF file");
-    let xcf_header = match &input_xcf {
-        XcfReader::Indexed(reader) => reader.header(),
-        XcfReader::Readthrough(reader) => reader.header(),
-    };
-    let sample_list = xcf_header.samples();
-    println!("Samples in VCF: {}", xcf_header.sample_count());
+        .expect("VCF file is required")
+        .to_owned();
 
     // Get the output path
     let _out_path = matches
@@ -173,27 +175,29 @@ fn main() {
     // Load sample lists as an u8 array
     let samples_a = read_file(sample_a)
         .expect("Invalid file for samples A")
-        .map(|s| s.expect("Failed to read sample A line"))
-        .filter(|s| sample_list.contains(&s.as_bytes()))
+        .map(|s| s.expect("Invalid string"))
         .collect::<Vec<String>>();
     let samples_b = read_file(sample_b)
         .expect("Invalid file for samples B")
-        .map(|s| s.expect("Failed to read sample B line"))
-        .filter(|s| sample_list.contains(&s.as_bytes()))
+        .map(|s| s.expect("Invalid string"))
         .collect::<Vec<String>>();
 
-    // Print number of samples
-    println!("Samples A: {}", samples_a.len());
-    println!("Samples B: {}", samples_b.len());
-
-    // Dies if no samples are retained
-    if samples_a.is_empty() || samples_b.is_empty() {
-        eprintln!("No samples found in the lists.");
-        std::process::exit(1);
-    }
+    // Load VCF file
+    let _ = process_xcf(
+        xcf_path,
+        &samples_a,
+        &samples_b,
+        chrom,
+        start,
+        end,
+        None,
+    );
 
     // Define thread pool
-    let pool = rayon::ThreadPoolBuilder::new().num_threads(*n_threads).build().unwrap();
+    let pool = rayon::ThreadPoolBuilder::new()
+        .num_threads(*n_threads)
+        .build()
+        .unwrap();
 
     // Demo
     let p1: Vec<f32> = vec![0.001, 0.0002, 0.01, 0.4, 0.9];
@@ -202,5 +206,4 @@ fn main() {
         // For example, a parallel iterator:
         println!("Harding likelihood: {p1:?}");
     });
-
 }

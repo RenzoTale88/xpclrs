@@ -2,11 +2,12 @@
 This module provides the I/O functions (e.g. VCF/BCF readers, text readers etc).
 */
 use anyhow::Result;
-use rust_htslib::bcf;
-use std::path::Path;
+use rust_htslib::bcf::{self, record::Genotype, IndexedReader, Read, Reader};
 use std::{
+    collections::HashSet,
     fmt::Display,
-    io::{BufRead, BufReader, Read},
+    io::{BufRead, BufReader},
+    path::Path,
 };
 
 // Define multople readers for the indexed and unindexed XCF file
@@ -31,8 +32,10 @@ pub fn read_xcf<P: AsRef<Path> + Display>(path: P, has_index: bool) -> Result<Xc
 pub fn read_file<P: AsRef<Path> + Display>(
     path: P,
 ) -> Result<impl Iterator<Item = Result<String>>> {
-    let sniffed_reader: std::result::Result<(Box<dyn Read>, niffler::Format), niffler::Error> =
-        niffler::from_path(&path);
+    let sniffed_reader: std::result::Result<
+        (Box<dyn std::io::Read>, niffler::Format),
+        niffler::Error,
+    > = niffler::from_path(&path);
     // if the file has fewer than 5 bytes, `niffler` can't sniff the compression format and will
     // return a `FileTooShort` error; this could be due to
     // * an empty file
@@ -53,4 +56,173 @@ pub fn read_file<P: AsRef<Path> + Display>(
             item.map_err(|e| anyhow::anyhow!("Error reading line: {}", e))
         });
     Ok(records)
+}
+
+// Consolidate the list
+fn consolidate_list(full_list: &Vec<&[u8]>, subset: &[String]) -> Result<Vec<String>> {
+    let filtered = subset
+        .iter()
+        .filter(|&s| full_list.contains(&s.as_bytes()))
+        .cloned()
+        .collect::<Vec<String>>();
+    Ok(filtered)
+}
+
+// Function to get the index of each sample in the lists
+fn get_gt_index(full_list: &Vec<&[u8]>, subset: &[String]) -> Result<Vec<usize>> {
+    let subset_set: HashSet<_> = subset.iter().collect();
+    let indices: Vec<usize> = full_list.iter()
+        .enumerate()
+        .filter_map(|(idx, &val)| {
+            if subset_set.contains(&String::from_utf8(val.to_owned()).unwrap()) { Some(idx) } else { None }
+        })
+        .collect();
+    Ok(indices)
+}
+
+
+// Process indexed XCF file
+fn indexed_xcf(
+    xcf_fn: String,
+    s1: &[String],
+    s2: &[String],
+    chrom: String,
+    start: u64,
+    end: Option<u64>,
+    _gdistkey: Option<String>,
+) -> Result<()> {
+    println!("Indexed reader.");
+    let homref = b"00";
+    println!("{homref:?}");
+    // Prepare the indexed reader
+    let mut reader = IndexedReader::from_path(xcf_fn).expect("Cannot load indexed BCF/VCF file");
+
+    // Load the XCF file
+    let xcf_header = reader.header().clone();
+    println!("Samples in VCF: {}", xcf_header.sample_count());
+
+    // Load sample lists as an u8 array
+    let s1 = consolidate_list(&xcf_header.samples(), s1).expect("Failed to subset sampleA");
+    let s2 = consolidate_list(&xcf_header.samples(), s2).expect("Failed to subset sampleB");
+
+    // Fetch the indices of each sample in each list
+    let i1 = get_gt_index(&xcf_header.samples(), &s1).expect("Failed to get indeces of sampleA");
+    let i2 = get_gt_index(&xcf_header.samples(), &s2).expect("Failed to get indeces of sampleB");
+
+    // Print number of samples
+    println!("Samples A: {}", i1.len());
+    println!("Samples B: {}", i2.len());
+
+    // Dies if no samples are retained
+    if s1.is_empty() || s2.is_empty() {
+        eprintln!("No samples found in the lists.");
+        std::process::exit(1);
+    }
+
+    // Start loading the genotypes here
+    // First, find the sequence index
+    let rid = reader
+        .header()
+        .name2rid(chrom.as_bytes())
+        .unwrap_or_else(|_| panic!("Chromosome ID not found {chrom}"));
+    println!("Chromosome {chrom} ID: {rid}");
+
+    // Jump to target position in place
+    let _ = reader.fetch(rid, start, end);
+    // Load the records
+    for record in reader.records() {
+        let record = record.unwrap();
+        let genotypes = record.genotypes()?;
+        let gt1 = &i1
+            .iter()
+            .map(|i| genotypes.get(*i))
+            .collect::<Vec<Genotype>>();
+        let gt2 = &i2
+            .iter()
+            .map(|i| genotypes.get(*i))
+            .collect::<Vec<Genotype>>();
+        println!("Record: {} {:#?} {:#?} {:#?} {}", chrom, record.alleles().get(0), record.alleles().get(1), record.rid(), record.pos());
+        println!("GT1: {:?}", gt1);
+        println!("GT2: {:?}", gt2);
+    }
+    Ok(())
+}
+
+// Process unindexed XCF
+fn readthrough_xcf(
+    xcf_fn: String,
+    s1: &[String],
+    s2: &[String],
+    chrom: String,
+    start: u64,
+    end: Option<u64>,
+    _gdistkey: Option<String>,
+) -> Result<()> {
+    println!("Streamed reader.");
+    // Prepare the indexed reader
+    let mut reader = Reader::from_path(xcf_fn).expect("Cannot load indexed BCF/VCF file");
+    let end = end.unwrap_or(999999999);
+
+    // Load the XCF file
+    let xcf_header = reader.header().clone();
+    println!("Samples in VCF: {}", xcf_header.sample_count());
+
+    // Load sample lists as an u8 array
+    let s1 = consolidate_list(&xcf_header.samples(), s1).expect("Failed to subset sampleA");
+    let s2 = consolidate_list(&xcf_header.samples(), s2).expect("Failed to subset sampleB");
+
+    // Print number of samples
+    println!("Samples A: {}", s1.len());
+    println!("Samples B: {}", s2.len());
+
+    // Dies if no samples are retained
+    if s1.is_empty() || s2.is_empty() {
+        eprintln!("No samples found in the lists.");
+        std::process::exit(1);
+    }
+
+    // Start loading the genotypes here
+    // First, find the sequence index
+    let rid = reader
+        .header()
+        .name2rid(chrom.as_bytes())
+        .unwrap_or_else(|_| panic!("Chromosome ID not found {chrom}"));
+    println!("Chromosome {chrom} ID: {rid}");
+
+    // Load the records
+    for record in reader.records() {
+        let record = record?;
+        if record.rid().unwrap() != rid {
+            continue;
+        }
+        let pos = record.pos() as u64;
+        if pos < start && pos >= end {
+            continue;
+        }
+        println!("{}", record.to_vcf_string()?);
+    }
+    Ok(())
+}
+
+// Load the genotypes for the given samples
+pub fn process_xcf(
+    xcf_fn: String,
+    s1: &[String],
+    s2: &[String],
+    chrom: String,
+    start: Option<u64>,
+    end: Option<u64>,
+    _gdistkey: Option<String>,
+) -> Result<()> {
+    // Process the data depending on the presence of the index
+    let start = start.unwrap_or(0);
+    // Prepare the input VCF
+    let tbi_path = format!("{xcf_fn}.tbi");
+    let csi_path = format!("{xcf_fn}.csi");
+    let has_index = Path::exists(Path::new(&tbi_path)) || Path::exists(Path::new(&csi_path));
+    let _ = match has_index {
+        true => indexed_xcf(xcf_fn, s1, s2, chrom, start, end, None),
+        false => readthrough_xcf(xcf_fn, s1, s2, chrom, start, end, None),
+    };
+    Ok(())
 }
