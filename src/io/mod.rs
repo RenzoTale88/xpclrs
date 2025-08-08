@@ -2,6 +2,7 @@
 This module provides the I/O functions (e.g. VCF/BCF readers, text readers etc).
 */
 use anyhow::Result;
+use itertools::MultiUnzip;
 use rust_htslib::bcf::{self, record::Genotype, IndexedReader, Read, Reader};
 use std::{
     collections::HashSet,
@@ -90,7 +91,9 @@ fn indexed_xcf(
     start: u64,
     end: Option<u64>,
     _gdistkey: Option<String>,
-) -> Result<()> {
+) -> Result<(
+    (Vec<i64>, Vec<Vec<Genotype>>, Vec<Vec<Genotype>>)
+)> {
     println!("Indexed reader.");
     let homref = b"00";
     println!("{homref:?}");
@@ -124,28 +127,32 @@ fn indexed_xcf(
     let rid = reader
         .header()
         .name2rid(chrom.as_bytes())
-        .unwrap_or_else(|_| panic!("Chromosome ID not found {chrom}"));
-    println!("Chromosome {chrom} ID: {rid}");
+        .expect("RID not found");
+    println!("Chromosome {chrom} (ID: {rid})");
 
     // Jump to target position in place
     let _ = reader.fetch(rid, start, end);
     // Load the records
-    for record in reader.records() {
-        let record = record.unwrap();
-        let genotypes = record.genotypes()?;
-        let gt1 = &i1
-            .iter()
-            .map(|i| genotypes.get(*i))
-            .collect::<Vec<Genotype>>();
-        let gt2 = &i2
-            .iter()
-            .map(|i| genotypes.get(*i))
-            .collect::<Vec<Genotype>>();
-        println!("Record: {} {:#?} {:#?} {:#?} {}", chrom, record.alleles().get(0), record.alleles().get(1), record.rid(), record.pos());
-        println!("GT1: {:?}", gt1);
-        println!("GT2: {:?}", gt2);
-    }
-    Ok(())
+    let (positions, gt1_data, gt2_data): (Vec<_>, Vec<_>, Vec<_>) = reader.records().filter_map(|r| {
+        let record = r.ok()?;
+
+        let genotypes = record.genotypes().expect("Cannot fetch the genotypes");
+        let gt1 = i1.iter().map(|i| genotypes.get(*i)).collect::<Vec<Genotype>>();
+        let gt2 = i2.iter().map(|i| genotypes.get(*i)).collect::<Vec<Genotype>>();
+
+        Some((record.pos(), gt1, gt2))
+    }).multiunzip();
+
+    // Assess everything looks good
+    if (gt1_data.len() != gt2_data.len()){
+        panic!("Inconsistent data")
+    };
+    if (positions.len() != gt2_data.len()){
+        panic!("Inconsistent data")
+    };
+    // Print some info
+    println!("Loaded {} variants", positions.len());
+    Ok((positions, gt1_data, gt2_data))
 }
 
 // Process unindexed XCF
@@ -157,8 +164,11 @@ fn readthrough_xcf(
     start: u64,
     end: Option<u64>,
     _gdistkey: Option<String>,
-) -> Result<()> {
-    println!("Streamed reader.");
+) -> Result<
+        (Vec<i64>, Vec<Vec<Genotype>>, Vec<Vec<Genotype>>)
+> {
+    println!("Streamed reader.\nThis is substantially slower than the indexed one");
+    println!("Consider generating an index for your BCF/VCF file.");
     // Prepare the indexed reader
     let mut reader = Reader::from_path(xcf_fn).expect("Cannot load indexed BCF/VCF file");
     let end = end.unwrap_or(999999999);
@@ -170,6 +180,10 @@ fn readthrough_xcf(
     // Load sample lists as an u8 array
     let s1 = consolidate_list(&xcf_header.samples(), s1).expect("Failed to subset sampleA");
     let s2 = consolidate_list(&xcf_header.samples(), s2).expect("Failed to subset sampleB");
+
+    // Fetch the indices of each sample in each list
+    let i1 = get_gt_index(&xcf_header.samples(), &s1).expect("Failed to get indeces of sampleA");
+    let i2 = get_gt_index(&xcf_header.samples(), &s2).expect("Failed to get indeces of sampleB");
 
     // Print number of samples
     println!("Samples A: {}", s1.len());
@@ -187,21 +201,37 @@ fn readthrough_xcf(
         .header()
         .name2rid(chrom.as_bytes())
         .unwrap_or_else(|_| panic!("Chromosome ID not found {chrom}"));
-    println!("Chromosome {chrom} ID: {rid}");
+    println!("Chromosome {chrom} (ID: {rid})");
 
     // Load the records
-    for record in reader.records() {
-        let record = record?;
-        if record.rid().unwrap() != rid {
-            continue;
-        }
-        let pos = record.pos() as u64;
-        if pos < start && pos >= end {
-            continue;
-        }
-        println!("{}", record.to_vcf_string()?);
-    }
-    Ok(())
+    let (positions, gt1_data, gt2_data): (Vec<_>, Vec<_>, Vec<_>) = reader
+        .records()
+        .filter(|r| {
+                let record = r.as_ref().unwrap();
+                let pos = record.pos() as u64;
+                record.rid().unwrap() == rid && (pos >= start && pos < end )
+            }
+        )
+        .filter_map(|r| {
+            let record = r.ok()?;
+            let genotypes = record.genotypes().expect("Cannot fetch the genotypes");
+            let gt1 = i1.iter().map(|i| genotypes.get(*i)).collect::<Vec<Genotype>>();
+            let gt2 = i2.iter().map(|i| genotypes.get(*i)).collect::<Vec<Genotype>>();
+
+            Some((record.pos(), gt1, gt2))
+        })
+        .multiunzip();
+
+    // Assess everything looks good
+    if (gt1_data.len() != gt2_data.len()){
+        panic!("Inconsistent data")
+    };
+    if (positions.len() != gt2_data.len()){
+        panic!("Inconsistent data")
+    };
+    // Print some info
+    println!("Loaded {} variants", positions.len());
+    Ok((positions, gt1_data, gt2_data))
 }
 
 // Load the genotypes for the given samples

@@ -123,7 +123,7 @@ fn main() {
             Arg::new("DISTKEYS")
                 .long("gdistkey")
                 .required(false)
-                .help("Key for genetic position in variants table of hdf5/VCF"),
+                .help("Key in INFO field providing the genetic position of each site in the VCF file"),
         )
         .arg(
             Arg::new("NTHREADS")
