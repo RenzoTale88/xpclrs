@@ -402,14 +402,9 @@ fn compute_complikelihood(
     if !(0.0..1.0).contains(&sc) {
         Ok(f32::INFINITY)
     } else {
-        let marginall = xs
-            .par_iter()
-            .zip(ns)
-            .zip(rds)
-            .zip(p2freqs)
-            .zip(weights)
-            .zip(omegas)
-            .map(|(((((xj, nj), r), p2), weight), omega)| {
+        let marginall = &(xs, ns, rds, p2freqs, weights, omegas)
+            .into_par_iter()
+            .map(|(xj, nj, r, p2, weight, omega)| {
                 // compute the variance
                 let var = var_estimate(*omega, *p2).expect("Cannot compute variance");
                 // Compute C
