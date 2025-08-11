@@ -12,9 +12,11 @@ categories = ["bioinformatics"]
 [dependencies]
 anyhow = "1.0.98"
 clap = "4.5.42"
-quad-rs = "0.2.2"
+env_logger  = "0.11"
 itertools = "0.14.0"
+log         = "0.4"
 niffler = "2.0.0"
+quad-rs = "0.2.2"
 rayon = "1.10.0"
 rust-htslib = "0.50.0"
 rustc-hash = "2.1.1"

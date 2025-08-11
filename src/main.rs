@@ -1,4 +1,5 @@
 use clap::{value_parser, Arg, Command};
+use env_logger::{self, Env};
 use xpclrs::io::{process_xcf, read_file};
 
 /*
@@ -136,6 +137,9 @@ fn main() {
         )
         .get_matches();
 
+    // set up logging
+    env_logger::Builder::from_env(Env::default().default_filter_or("info")).init();
+
     // Fixed parameters
     let chrom = matches
         .get_one::<String>("CHROM")
@@ -198,6 +202,6 @@ fn main() {
     pool.install(|| {
         // Code here runs using at most num_threads threads
         // For example, a parallel iterator:
-        println!("Harding likelihood: {p1:?}");
+        log::info!(target: "xpclr", "Harding likelihood: {p1:?}");
     });
 }

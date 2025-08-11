@@ -2,9 +2,10 @@
 This module provides the I/O functions (e.g. VCF/BCF readers, text readers etc).
 */
 use anyhow::Result;
+use env_logger::{self, Env};
 use itertools::MultiUnzip;
 use rayon::prelude::*;
-use rust_htslib::bcf::{self, record::Genotype, IndexedReader, Read, Reader};
+use rust_htslib::bcf::{self, record::{Genotype, GenotypeAllele}, IndexedReader, Read, Reader};
 use std::{
     collections::HashSet,
     fmt::Display,
@@ -93,15 +94,13 @@ fn indexed_xcf(
     end: Option<u64>,
     _gdistkey: Option<String>,
 ) -> Result<(Vec<i64>, Vec<Vec<Genotype>>, Vec<Vec<Genotype>>)> {
-    println!("Indexed reader.");
-    let homref = b"00";
-    println!("{homref:?}");
+    log::info!("Indexed reader.");
     // Prepare the indexed reader
     let mut reader = IndexedReader::from_path(xcf_fn).expect("Cannot load indexed BCF/VCF file");
 
     // Load the XCF file
     let xcf_header = reader.header().clone();
-    println!("Samples in VCF: {}", xcf_header.sample_count());
+    log::info!("Samples in VCF: {}", xcf_header.sample_count());
 
     // Load sample lists as an u8 array
     let s1 = consolidate_list(&xcf_header.samples(), s1).expect("Failed to subset sampleA");
@@ -112,8 +111,8 @@ fn indexed_xcf(
     let i2 = get_gt_index(&xcf_header.samples(), &s2).expect("Failed to get indeces of sampleB");
 
     // Print number of samples
-    println!("Samples A: {}", i1.len());
-    println!("Samples B: {}", i2.len());
+    log::info!("Samples A: {}", i1.len());
+    log::info!("Samples B: {}", i2.len());
 
     // Dies if no samples are retained
     if s1.is_empty() || s2.is_empty() {
@@ -127,19 +126,46 @@ fn indexed_xcf(
         .header()
         .name2rid(chrom.as_bytes())
         .expect("RID not found");
-    println!("Chromosome {chrom} (ID: {rid})");
+    log::info!("Chromosome {chrom} (ID: {rid})");
 
     // Jump to target position in place
     let _ = reader.fetch(rid, start, end);
-    // Load the records
+    // Load the records, defining the counters of how many sites we skip 
+    let mut multiallelic = 0;
+    let mut monom_gt1 = 0;
+    let mut monom_gt2 = 0;
+    let mut pass = 0;
+    let mut tot = 0;
     let (positions, gt1_data, gt2_data): (Vec<_>, Vec<_>, Vec<_>) = reader.records().filter_map(|r| {
         let record = r.ok()?;
-
+        tot += 1;
         let genotypes = record.genotypes().expect("Cannot fetch the genotypes");
         let gt1 = i1.iter().map(|i| genotypes.get(*i)).collect::<Vec<Genotype>>();
         let gt2 = i2.iter().map(|i| genotypes.get(*i)).collect::<Vec<Genotype>>();
+        // Check that the site is biallelic
+        let alleles1: HashSet<u32> = gt1.iter()
+            .flat_map(|g| g.iter().filter_map(|&a: &GenotypeAllele| a.index()))
+            .collect::<HashSet<u32>>();
 
-        Some((record.pos(), gt1, gt2))
+        let alleles2: HashSet<u32> = gt2.iter()
+            .flat_map(|g| g.iter().filter_map(|a| a.index()))
+            .collect::<HashSet<u32>>();
+
+        // Union both sets
+        let all_alleles: HashSet<_> = alleles1.union(&alleles2).cloned().collect();
+        if all_alleles.len() > 2 {
+            multiallelic += 1;
+            None
+        } else if alleles1.len() == 1 {
+            monom_gt1 += 1;
+            None
+        } else if alleles2.len() == 1 {
+            monom_gt2 += 1;
+            None
+        } else {
+            pass += 1;
+            Some((record.pos(), gt1, gt2))
+        }
     }).multiunzip();
 
     // Assess everything looks good
@@ -149,8 +175,18 @@ fn indexed_xcf(
     if positions.len() != gt2_data.len() {
         panic!("Inconsistent data")
     };
+    if positions.len() as i32 != pass {
+        panic!("Inconsistent data")
+    };
+    if tot != (pass + multiallelic + monom_gt1 + monom_gt2){
+        panic!("Inconsistent counts")
+    }
     // Print some info
-    println!("Loaded {} variants", positions.len());
+    log::info!("Processed {} variants", tot);
+    log::info!("Loaded {} variants", positions.len());
+    log::info!("Skipped {} multiallelic variants", multiallelic);
+    log::info!("Skipped {} monomorphic variants in pop A", monom_gt1);
+    log::info!("Skipped {} monomorphic variants in pop B", monom_gt2);
     Ok((positions, gt1_data, gt2_data))
 }
 
@@ -166,15 +202,16 @@ fn readthrough_xcf(
 ) -> Result<
         (Vec<i64>, Vec<Vec<Genotype>>, Vec<Vec<Genotype>>)
 > {
-    println!("Streamed reader.\nThis is substantially slower than the indexed one");
-    println!("Consider generating an index for your BCF/VCF file.");
+    log::info!("Streamed reader.");
+    log::info!("This is substantially slower than the indexed one.");
+    log::info!("Consider generating an index for your BCF/VCF file.");
     // Prepare the indexed reader
     let mut reader = Reader::from_path(xcf_fn).expect("Cannot load indexed BCF/VCF file");
     let end = end.unwrap_or(999999999);
 
     // Load the XCF file
     let xcf_header = reader.header().clone();
-    println!("Samples in VCF: {}", xcf_header.sample_count());
+    log::info!("Samples in VCF: {}", xcf_header.sample_count());
 
     // Load sample lists as an u8 array
     let s1 = consolidate_list(&xcf_header.samples(), s1).expect("Failed to subset sampleA");
@@ -185,8 +222,8 @@ fn readthrough_xcf(
     let i2 = get_gt_index(&xcf_header.samples(), &s2).expect("Failed to get indeces of sampleB");
 
     // Print number of samples
-    println!("Samples A: {}", s1.len());
-    println!("Samples B: {}", s2.len());
+    log::info!("Samples A: {}", s1.len());
+    log::info!("Samples B: {}", s2.len());
 
     // Dies if no samples are retained
     if s1.is_empty() || s2.is_empty() {
@@ -200,9 +237,14 @@ fn readthrough_xcf(
         .header()
         .name2rid(chrom.as_bytes())
         .unwrap_or_else(|_| panic!("Chromosome ID not found {chrom}"));
-    println!("Chromosome {chrom} (ID: {rid})");
+    log::info!("Chromosome {chrom} (ID: {rid})");
 
-    // Load the records
+    // Load the records, defining the counters of how many sites we skip 
+    let mut multiallelic = 0;
+    let mut monom_gt1 = 0;
+    let mut monom_gt2 = 0;
+    let mut pass = 0;
+    let mut tot = 0;
     let (positions, gt1_data, gt2_data): (Vec<_>, Vec<_>, Vec<_>) = reader
         .records()
         .filter(|r| {
@@ -213,13 +255,35 @@ fn readthrough_xcf(
         )
         .filter_map(|r| {
             let record = r.ok()?;
+            tot += 1;
             let genotypes = record.genotypes().expect("Cannot fetch the genotypes");
             let gt1 = i1.iter().map(|i| genotypes.get(*i)).collect::<Vec<Genotype>>();
             let gt2 = i2.iter().map(|i| genotypes.get(*i)).collect::<Vec<Genotype>>();
+            // Check that the site is biallelic
+            let alleles1: HashSet<u32> = gt1.iter()
+                .flat_map(|g| g.iter().filter_map(|&a: &GenotypeAllele| a.index()))
+                .collect::<HashSet<u32>>();
 
-            Some((record.pos(), gt1, gt2))
-        })
-        .multiunzip();
+            let alleles2: HashSet<u32> = gt2.iter()
+                .flat_map(|g| g.iter().filter_map(|a| a.index()))
+                .collect::<HashSet<u32>>();
+
+            // Union both sets
+            let all_alleles: HashSet<_> = alleles1.union(&alleles2).cloned().collect();
+            if all_alleles.len() > 2 {
+                multiallelic += 1;
+                None
+            } else if alleles1.len() == 1 {
+                monom_gt1 += 1;
+                None
+            } else if alleles2.len() == 1 {
+                monom_gt2 += 1;
+                None
+            } else {
+                pass += 1;
+                Some((record.pos(), gt1, gt2))
+            }
+        }).multiunzip();
 
     // Assess everything looks good
     if gt1_data.len() != gt2_data.len() {
@@ -228,8 +292,18 @@ fn readthrough_xcf(
     if positions.len() != gt2_data.len() {
         panic!("Inconsistent data")
     };
+    if positions.len() as i32 != pass {
+        panic!("Inconsistent data")
+    };
+    if tot != (pass + multiallelic + monom_gt1 + monom_gt2){
+        panic!("Inconsistent counts")
+    }
     // Print some info
-    println!("Loaded {} variants", positions.len());
+    log::info!("Processed {} variants", tot);
+    log::info!("Loaded {} variants", positions.len());
+    log::info!("Skipped {} multiallelic variants", multiallelic);
+    log::info!("Skipped {} monomorphic variants in pop A", monom_gt1);
+    log::info!("Skipped {} monomorphic variants in pop B", monom_gt2);
     Ok((positions, gt1_data, gt2_data))
 }
 
