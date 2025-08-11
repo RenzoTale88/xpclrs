@@ -5,6 +5,11 @@ use anyhow::Result;
 use quad_rs::{EvaluationError, Integrable, Integrator};
 use rand::prelude::IndexedRandom;
 use rayon::prelude::*;
+use rust_htslib::bcf::{
+    self,
+    record::{Genotype, GenotypeAllele},
+    IndexedReader, Read, Reader,
+};
 use scirs2_integrate::romberg::{romberg, RombergOptions};
 use statistical::mean;
 use statrs::distribution::{Binomial, Discrete};
@@ -489,6 +494,21 @@ fn _window(
 // To be done after having had a peek into how htslib manages the genotypes
 fn _weights(_ldcutoff: f32, _isphased: bool) -> Result<f32> {
     Ok(0.0)
+}
+
+// Main XP-CLR caller
+fn xpclr(
+    (gt1, gt2): (Vec<Vec<Genotype>>, Vec<Vec<Genotype>>),
+    (bpositions, windows): (Vec<u64>, Vec<(usize, usize)>),
+    geneticd: Option<Vec<f32>>,
+    (ldcutoff, phased, rrate): (Option<f32>, Option<bool>, Option<f32>),
+    (maxsnps, minsnps): (Option<usize>, Option<usize>),
+) -> Result<()> {
+    let sel_coefs = vec![
+        0.0, 0.00001, 0.00005, 0.0001, 0.0002, 0.0004, 0.0006, 0.0008, 0.001, 0.003, 0.005, 0.01,
+        0.05, 0.08, 0.1, 0.15,
+    ];
+    Ok(())
 }
 
 /*

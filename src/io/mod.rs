@@ -5,7 +5,11 @@ use anyhow::Result;
 use counter::Counter;
 use itertools::MultiUnzip;
 use rayon::prelude::*;
-use rust_htslib::bcf::{self, record::{Genotype, GenotypeAllele}, IndexedReader, Read, Reader};
+use rust_htslib::bcf::{
+    self,
+    record::{Genotype, GenotypeAllele},
+    IndexedReader, Read, Reader,
+};
 use std::{
     collections::HashSet,
     fmt::Display,
@@ -74,15 +78,19 @@ fn consolidate_list(full_list: &Vec<&[u8]>, subset: &[String]) -> Result<Vec<Str
 // Function to get the index of each sample in the lists
 fn get_gt_index(full_list: &Vec<&[u8]>, subset: &[String]) -> Result<Vec<usize>> {
     let subset_set: HashSet<_> = subset.iter().collect();
-    let indices: Vec<usize> = full_list.iter()
+    let indices: Vec<usize> = full_list
+        .iter()
         .enumerate()
         .filter_map(|(idx, &val)| {
-            if subset_set.contains(&String::from_utf8(val.to_owned()).unwrap()) { Some(idx) } else { None }
+            if subset_set.contains(&String::from_utf8(val.to_owned()).unwrap()) {
+                Some(idx)
+            } else {
+                None
+            }
         })
         .collect();
     Ok(indices)
 }
-
 
 // Process indexed XCF file
 fn indexed_xcf(
@@ -130,7 +138,7 @@ fn indexed_xcf(
 
     // Jump to target position in place
     let _ = reader.fetch(rid, start, end);
-    // Load the records, defining the counters of how many sites we skip 
+    // Load the records, defining the counters of how many sites we skip
     let mut multiallelic = 0;
     let mut monom_gt1 = 0;
     let mut monom_gt2 = 0;
@@ -139,55 +147,70 @@ fn indexed_xcf(
     let mut pass = 0;
     let mut skipped = 0;
     let mut tot = 0;
-    let (positions, gt1_data, gt2_data): (Vec<_>, Vec<_>, Vec<_>) = reader.records().filter_map(|r| {
-        let record = r.ok()?;
-        tot += 1;
-        let genotypes = record.genotypes().expect("Cannot fetch the genotypes");
-        let gt1 = i1.iter().map(|i| genotypes.get(*i)).collect::<Vec<Genotype>>();
-        let gt2 = i2.iter().map(|i| genotypes.get(*i)).collect::<Vec<Genotype>>();
-        // Check that the site is biallelic
-        let alleles1: Counter<u32> = gt1.iter()
-            .flat_map(|g| g.iter().filter_map(|&a: &GenotypeAllele| a.index()))
-            .collect::<Counter<u32>>();
+    let (positions, gt1_data, gt2_data): (Vec<_>, Vec<_>, Vec<_>) = reader
+        .records()
+        .filter_map(|r| {
+            let record = r.ok()?;
+            tot += 1;
+            let genotypes = record.genotypes().expect("Cannot fetch the genotypes");
+            let gt1 = i1
+                .iter()
+                .map(|i| genotypes.get(*i))
+                .collect::<Vec<Genotype>>();
+            let gt2 = i2
+                .iter()
+                .map(|i| genotypes.get(*i))
+                .collect::<Vec<Genotype>>();
+            // Check that the site is biallelic
+            let alleles1: Counter<u32> = gt1
+                .iter()
+                .flat_map(|g| g.iter().filter_map(|&a: &GenotypeAllele| a.index()))
+                .collect::<Counter<u32>>();
 
-        let alleles2: Counter<u32> = gt2.iter()
-            .flat_map(|g| g.iter().filter_map(|a| a.index()))
-            .collect::<Counter<u32>>();
+            let alleles2: Counter<u32> = gt2
+                .iter()
+                .flat_map(|g| g.iter().filter_map(|a| a.index()))
+                .collect::<Counter<u32>>();
 
-        // Union both sets
-        let mut all_alleles: Counter<_> = alleles1.clone();
-        all_alleles.extend(&alleles2);
+            // Union both sets
+            let mut all_alleles: Counter<_> = alleles1.clone();
+            all_alleles.extend(&alleles2);
 
-        // Perform filtering and counting
-        if all_alleles.len() > 2 {
-            skipped += 1;
-            multiallelic += 1;
-            None
-        } else if alleles1.len() == 0 || alleles2.len() == 0 {
-            skipped += 1;
-            if alleles1.len() == 0 {
-                miss_gt1 += 1;
-            };
-            if alleles2.len() == 0 {
-                miss_gt2 += 1;
-            };
-            None
-        } else {
-            if alleles1.len() == 1 || alleles1.values().min().copied()? == 1 || alleles2.len() == 1 || alleles2.values().min().copied()? == 1 {
+            // Perform filtering and counting
+            if all_alleles.len() > 2 {
                 skipped += 1;
-                if alleles1.len() == 1 || alleles1.values().min().copied()? == 1 {
-                    monom_gt1 += 1;
+                multiallelic += 1;
+                None
+            } else if alleles1.len() == 0 || alleles2.len() == 0 {
+                skipped += 1;
+                if alleles1.len() == 0 {
+                    miss_gt1 += 1;
                 };
-                if alleles2.len() == 1 || alleles2.values().min().copied()? == 1 {
-                    monom_gt2 += 1;
-                }
+                if alleles2.len() == 0 {
+                    miss_gt2 += 1;
+                };
                 None
             } else {
-                pass += 1;
-                Some((record.pos(), gt1, gt2))
+                if alleles1.len() == 1
+                    || alleles1.values().min().copied()? == 1
+                    || alleles2.len() == 1
+                    || alleles2.values().min().copied()? == 1
+                {
+                    skipped += 1;
+                    if alleles1.len() == 1 || alleles1.values().min().copied()? == 1 {
+                        monom_gt1 += 1;
+                    };
+                    if alleles2.len() == 1 || alleles2.values().min().copied()? == 1 {
+                        monom_gt2 += 1;
+                    }
+                    None
+                } else {
+                    pass += 1;
+                    Some((record.pos(), gt1, gt2))
+                }
             }
-        }
-    }).multiunzip();
+        })
+        .multiunzip();
 
     // Assess everything looks good
     if gt1_data.len() != gt2_data.len() {
@@ -200,7 +223,7 @@ fn indexed_xcf(
         panic!("Inconsistent data")
     };
     println!("{tot} = {pass} {skipped}");
-    if tot != (pass + skipped){
+    if tot != (pass + skipped) {
         panic!("Inconsistent counts")
     }
     // Print some info
@@ -224,9 +247,7 @@ fn readthrough_xcf(
     start: u64,
     end: Option<u64>,
     _gdistkey: Option<String>,
-) -> Result<
-        (Vec<i64>, Vec<Vec<Genotype>>, Vec<Vec<Genotype>>)
-> {
+) -> Result<(Vec<i64>, Vec<Vec<Genotype>>, Vec<Vec<Genotype>>)> {
     log::info!("Streamed reader.");
     log::info!("This is substantially slower than the indexed one.");
     log::info!("Consider generating an index for your BCF/VCF file.");
@@ -264,7 +285,7 @@ fn readthrough_xcf(
         .unwrap_or_else(|_| panic!("Chromosome ID not found {chrom}"));
     log::info!("Chromosome {chrom} (ID: {rid})");
 
-    // Load the records, defining the counters of how many sites we skip 
+    // Load the records, defining the counters of how many sites we skip
     let mut multiallelic = 0;
     let mut monom_gt1 = 0;
     let mut monom_gt2 = 0;
@@ -276,24 +297,31 @@ fn readthrough_xcf(
     let (positions, gt1_data, gt2_data): (Vec<_>, Vec<_>, Vec<_>) = reader
         .records()
         .filter(|r| {
-                let record = r.as_ref().unwrap();
-                let pos = record.pos() as u64;
-                record.rid().unwrap() == rid && (pos >= start && pos < end )
-            }
-        )
+            let record = r.as_ref().unwrap();
+            let pos = record.pos() as u64;
+            record.rid().unwrap() == rid && (pos >= start && pos < end)
+        })
         .filter_map(|r| {
             let record = r.ok()?;
             tot += 1;
             let genotypes = record.genotypes().expect("Cannot fetch the genotypes");
-            let gt1 = i1.iter().map(|i| genotypes.get(*i)).collect::<Vec<Genotype>>();
-            let gt2 = i2.iter().map(|i| genotypes.get(*i)).collect::<Vec<Genotype>>();
+            let gt1 = i1
+                .iter()
+                .map(|i| genotypes.get(*i))
+                .collect::<Vec<Genotype>>();
+            let gt2 = i2
+                .iter()
+                .map(|i| genotypes.get(*i))
+                .collect::<Vec<Genotype>>();
 
             // Check that the site is biallelic
-            let alleles1: Counter<u32> = gt1.iter()
+            let alleles1: Counter<u32> = gt1
+                .iter()
                 .flat_map(|g| g.iter().filter_map(|&a: &GenotypeAllele| a.index()))
                 .collect::<Counter<u32>>();
 
-            let alleles2: Counter<u32> = gt2.iter()
+            let alleles2: Counter<u32> = gt2
+                .iter()
                 .flat_map(|g| g.iter().filter_map(|a| a.index()))
                 .collect::<Counter<u32>>();
 
@@ -316,7 +344,11 @@ fn readthrough_xcf(
                 };
                 None
             } else {
-                if alleles1.len() == 1 || alleles1.values().min().copied()? == 1 || alleles2.len() == 1 || alleles2.values().min().copied()? == 1 {
+                if alleles1.len() == 1
+                    || alleles1.values().min().copied()? == 1
+                    || alleles2.len() == 1
+                    || alleles2.values().min().copied()? == 1
+                {
                     skipped += 1;
                     if alleles1.len() == 1 || alleles1.values().min().copied()? == 1 {
                         monom_gt1 += 1;
@@ -330,7 +362,8 @@ fn readthrough_xcf(
                     Some((record.pos(), gt1, gt2))
                 }
             }
-        }).multiunzip();
+        })
+        .multiunzip();
 
     // Assess everything looks good
     if gt1_data.len() != gt2_data.len() {
@@ -343,7 +376,7 @@ fn readthrough_xcf(
         panic!("Inconsistent data")
     };
     println!("{tot} = {pass} {skipped}");
-    if tot != (pass + skipped){
+    if tot != (pass + skipped) {
         panic!("Inconsistent counts")
     }
     // Print some info
@@ -377,6 +410,7 @@ pub fn process_xcf(
     let (positions, gt1_data, gt2_data) = match has_index {
         true => indexed_xcf(xcf_fn, s1, s2, chrom, start, end, None),
         false => readthrough_xcf(xcf_fn, s1, s2, chrom, start, end, None),
-    }.expect("Failed to parse the VCF/BCF file");
+    }
+    .expect("Failed to parse the VCF/BCF file");
     Ok((positions, gt1_data, gt2_data))
 }

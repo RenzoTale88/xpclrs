@@ -14,128 +14,126 @@ use xpclrs::io::{process_xcf, read_file};
 
 fn main() {
     let version = env!("CARGO_PKG_VERSION");
-    let matches = Command::new("xpclr")
-        .version(version)
-        .author("Andrea Talenti <andrea.talenti@ed.ac.uk>")
-        .about("Compute the XP-CLR for a pair of populations from a VCF file.")
-        .arg(
-            Arg::new("VCF")
-                .short('I')
-                .long("input")
-                .required(true)
-                .help("input VCF file"),
-        )
-        .arg(
-            Arg::new("OUT")
-                .short('O')
-                .long("out")
-                .required(true)
-                .help("Output file name."),
-        )
-        .arg(
-            Arg::new("SAMPLES_A")
-                .short('A')
-                .long("samplesA")
-                .required(true)
-                .help("Samples in population A. Path to file with each ID on a line."),
-        )
-        .arg(
-            Arg::new("SAMPLES_B")
-                .short('B')
-                .long("samplesB")
-                .required(true)
-                .help("Samples in population B. Path to file with each ID on a line."),
-        )
-        .arg(
-            Arg::new("RECRATE")
-                .long("rrate")
-                .short('R')
-                .required(false)
-                .default_value("1e-8")
-                .value_parser(value_parser!(f32))
-                .help("Recombination rate per base."),
-        )
-        .arg(
-            Arg::new("LDCUTOFF")
-                .long("ld")
-                .short('L')
-                .required(false)
-                .default_value("0.95")
-                .value_parser(value_parser!(f32))
-                .help("LD cutoff."),
-        )
-        .arg(
-            Arg::new("MAXSNPS")
-                .long("maxsnps")
-                .short('m')
-                .required(false)
-                .default_value("200")
-                .value_parser(value_parser!(i32))
-                .help("Max SNPs in a window."),
-        )
-        .arg(
-            Arg::new("MINSNPS")
-                .long("minsnps")
-                .short('N')
-                .required(false)
-                .default_value("10")
-                .value_parser(value_parser!(i32))
-                .help("Min SNPs in a window."),
-        )
-        .arg(
-            Arg::new("SIZE")
-                .long("size")
-                .required(false)
-                .default_value("20000")
-                .value_parser(value_parser!(i32))
-                .help("Sliding window size."),
-        )
-        .arg(
-            Arg::new("START")
-                .long("start")
-                .required(false)
-                .default_value("1")
-                .value_parser(value_parser!(u64))
-                .help("Start position for the sliding windows."),
-        )
-        .arg(
-            Arg::new("STOP")
-                .long("stop")
-                .required(false)
-                .value_parser(value_parser!(u64))
-                .help("Stop position for the sliding windows."),
-        )
-        .arg(
-            Arg::new("STEP")
-                .long("step")
-                .required(false)
-                .default_value("20000")
-                .value_parser(value_parser!(u64))
-                .help("Step size for the sliding windows."),
-        )
-        .arg(
-            Arg::new("CHROM")
-                .short('C')
-                .long("chr")
-                .required(false)
-                .help("Chromosome to analyse."),
-        )
-        .arg(
-            Arg::new("DISTKEYS")
-                .long("gdistkey")
-                .required(false)
-                .help("Key in INFO field providing the genetic position of each site in the VCF file"),
-        )
-        .arg(
-            Arg::new("NTHREADS")
-                .short('t')
-                .long("threads")
-                .required(false)
-                .default_value("1")
-                .value_parser(value_parser!(usize))
-                .help("Number of threads to use"),
-        )
-        .get_matches();
+    let matches =
+        Command::new("xpclr")
+            .version(version)
+            .author("Andrea Talenti <andrea.talenti@ed.ac.uk>")
+            .about("Compute the XP-CLR for a pair of populations from a VCF file.")
+            .arg(
+                Arg::new("VCF")
+                    .short('I')
+                    .long("input")
+                    .required(true)
+                    .help("input VCF file"),
+            )
+            .arg(
+                Arg::new("OUT")
+                    .short('O')
+                    .long("out")
+                    .required(true)
+                    .help("Output file name."),
+            )
+            .arg(
+                Arg::new("SAMPLES_A")
+                    .short('A')
+                    .long("samplesA")
+                    .required(true)
+                    .help("Samples in population A. Path to file with each ID on a line."),
+            )
+            .arg(
+                Arg::new("SAMPLES_B")
+                    .short('B')
+                    .long("samplesB")
+                    .required(true)
+                    .help("Samples in population B. Path to file with each ID on a line."),
+            )
+            .arg(
+                Arg::new("RECRATE")
+                    .long("rrate")
+                    .short('R')
+                    .required(false)
+                    .default_value("1e-8")
+                    .value_parser(value_parser!(f32))
+                    .help("Recombination rate per base."),
+            )
+            .arg(
+                Arg::new("LDCUTOFF")
+                    .long("ld")
+                    .short('L')
+                    .required(false)
+                    .default_value("0.95")
+                    .value_parser(value_parser!(f32))
+                    .help("LD cutoff."),
+            )
+            .arg(
+                Arg::new("MAXSNPS")
+                    .long("maxsnps")
+                    .short('m')
+                    .required(false)
+                    .default_value("200")
+                    .value_parser(value_parser!(i32))
+                    .help("Max SNPs in a window."),
+            )
+            .arg(
+                Arg::new("MINSNPS")
+                    .long("minsnps")
+                    .short('N')
+                    .required(false)
+                    .default_value("10")
+                    .value_parser(value_parser!(i32))
+                    .help("Min SNPs in a window."),
+            )
+            .arg(
+                Arg::new("SIZE")
+                    .long("size")
+                    .required(false)
+                    .default_value("20000")
+                    .value_parser(value_parser!(i32))
+                    .help("Sliding window size."),
+            )
+            .arg(
+                Arg::new("START")
+                    .long("start")
+                    .required(false)
+                    .default_value("1")
+                    .value_parser(value_parser!(u64))
+                    .help("Start position for the sliding windows."),
+            )
+            .arg(
+                Arg::new("STOP")
+                    .long("stop")
+                    .required(false)
+                    .value_parser(value_parser!(u64))
+                    .help("Stop position for the sliding windows."),
+            )
+            .arg(
+                Arg::new("STEP")
+                    .long("step")
+                    .required(false)
+                    .default_value("20000")
+                    .value_parser(value_parser!(u64))
+                    .help("Step size for the sliding windows."),
+            )
+            .arg(
+                Arg::new("CHROM")
+                    .short('C')
+                    .long("chr")
+                    .required(false)
+                    .help("Chromosome to analyse."),
+            )
+            .arg(Arg::new("DISTKEYS").long("gdistkey").required(false).help(
+                "Key in INFO field providing the genetic position of each site in the VCF file",
+            ))
+            .arg(
+                Arg::new("NTHREADS")
+                    .short('t')
+                    .long("threads")
+                    .required(false)
+                    .default_value("1")
+                    .value_parser(value_parser!(usize))
+                    .help("Number of threads to use"),
+            )
+            .get_matches();
 
     // set up logging
     env_logger::Builder::from_env(Env::default().default_filter_or("info")).init();
@@ -181,15 +179,9 @@ fn main() {
         .collect::<Vec<String>>();
 
     // Load VCF file
-    let (positions, gt1_data, gt2_data) = process_xcf(
-        xcf_path,
-        &samples_a,
-        &samples_b,
-        chrom,
-        start,
-        end,
-        None,
-    ).expect("Failed to read the VCF/BCF file");
+    let (positions, gt1_data, gt2_data) =
+        process_xcf(xcf_path, &samples_a, &samples_b, chrom, start, end, None)
+            .expect("Failed to read the VCF/BCF file");
 
     // Define thread pool
     let pool = rayon::ThreadPoolBuilder::new()
