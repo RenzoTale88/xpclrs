@@ -181,7 +181,7 @@ fn main() {
         .collect::<Vec<String>>();
 
     // Load VCF file
-    let _ = process_xcf(
+    let (positions, gt1_data, gt2_data) = process_xcf(
         xcf_path,
         &samples_a,
         &samples_b,
@@ -189,7 +189,7 @@ fn main() {
         start,
         end,
         None,
-    );
+    ).expect("Failed to read the VCF/BCF file");
 
     // Define thread pool
     let pool = rayon::ThreadPoolBuilder::new()

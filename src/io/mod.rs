@@ -367,16 +367,16 @@ pub fn process_xcf(
     start: Option<u64>,
     end: Option<u64>,
     _gdistkey: Option<String>,
-) -> Result<()> {
+) -> Result<(Vec<i64>, Vec<Vec<Genotype>>, Vec<Vec<Genotype>>)> {
     // Process the data depending on the presence of the index
     let start = start.unwrap_or(0);
     // Prepare the input VCF
     let tbi_path = format!("{xcf_fn}.tbi");
     let csi_path = format!("{xcf_fn}.csi");
     let has_index = Path::exists(Path::new(&tbi_path)) || Path::exists(Path::new(&csi_path));
-    let _ = match has_index {
+    let (positions, gt1_data, gt2_data) = match has_index {
         true => indexed_xcf(xcf_fn, s1, s2, chrom, start, end, None),
         false => readthrough_xcf(xcf_fn, s1, s2, chrom, start, end, None),
-    };
-    Ok(())
+    }.expect("Failed to parse the VCF/BCF file");
+    Ok((positions, gt1_data, gt2_data))
 }
