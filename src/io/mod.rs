@@ -2,7 +2,7 @@
 This module provides the I/O functions (e.g. VCF/BCF readers, text readers etc).
 */
 use anyhow::Result;
-use env_logger::{self, Env};
+use counter::Counter;
 use itertools::MultiUnzip;
 use rayon::prelude::*;
 use rust_htslib::bcf::{self, record::{Genotype, GenotypeAllele}, IndexedReader, Read, Reader};
@@ -134,7 +134,10 @@ fn indexed_xcf(
     let mut multiallelic = 0;
     let mut monom_gt1 = 0;
     let mut monom_gt2 = 0;
+    let mut miss_gt1 = 0;
+    let mut miss_gt2 = 0;
     let mut pass = 0;
+    let mut skipped = 0;
     let mut tot = 0;
     let (positions, gt1_data, gt2_data): (Vec<_>, Vec<_>, Vec<_>) = reader.records().filter_map(|r| {
         let record = r.ok()?;
@@ -143,28 +146,46 @@ fn indexed_xcf(
         let gt1 = i1.iter().map(|i| genotypes.get(*i)).collect::<Vec<Genotype>>();
         let gt2 = i2.iter().map(|i| genotypes.get(*i)).collect::<Vec<Genotype>>();
         // Check that the site is biallelic
-        let alleles1: HashSet<u32> = gt1.iter()
+        let alleles1: Counter<u32> = gt1.iter()
             .flat_map(|g| g.iter().filter_map(|&a: &GenotypeAllele| a.index()))
-            .collect::<HashSet<u32>>();
+            .collect::<Counter<u32>>();
 
-        let alleles2: HashSet<u32> = gt2.iter()
+        let alleles2: Counter<u32> = gt2.iter()
             .flat_map(|g| g.iter().filter_map(|a| a.index()))
-            .collect::<HashSet<u32>>();
+            .collect::<Counter<u32>>();
 
         // Union both sets
-        let all_alleles: HashSet<_> = alleles1.union(&alleles2).cloned().collect();
+        let mut all_alleles: Counter<_> = alleles1.clone();
+        all_alleles.extend(&alleles2);
+
+        // Perform filtering and counting
         if all_alleles.len() > 2 {
+            skipped += 1;
             multiallelic += 1;
             None
-        } else if alleles1.len() == 1 {
-            monom_gt1 += 1;
-            None
-        } else if alleles2.len() == 1 {
-            monom_gt2 += 1;
+        } else if alleles1.len() == 0 || alleles2.len() == 0 {
+            skipped += 1;
+            if alleles1.len() == 0 {
+                miss_gt1 += 1;
+            };
+            if alleles2.len() == 0 {
+                miss_gt2 += 1;
+            };
             None
         } else {
-            pass += 1;
-            Some((record.pos(), gt1, gt2))
+            if alleles1.len() == 1 || alleles1.values().min().copied()? == 1 || alleles2.len() == 1 || alleles2.values().min().copied()? == 1 {
+                skipped += 1;
+                if alleles1.len() == 1 || alleles1.values().min().copied()? == 1 {
+                    monom_gt1 += 1;
+                };
+                if alleles2.len() == 1 || alleles2.values().min().copied()? == 1 {
+                    monom_gt2 += 1;
+                }
+                None
+            } else {
+                pass += 1;
+                Some((record.pos(), gt1, gt2))
+            }
         }
     }).multiunzip();
 
@@ -178,15 +199,19 @@ fn indexed_xcf(
     if positions.len() as i32 != pass {
         panic!("Inconsistent data")
     };
-    if tot != (pass + multiallelic + monom_gt1 + monom_gt2){
+    println!("{tot} = {pass} {skipped}");
+    if tot != (pass + skipped){
         panic!("Inconsistent counts")
     }
     // Print some info
     log::info!("Processed {} variants", tot);
-    log::info!("Loaded {} variants", positions.len());
-    log::info!("Skipped {} multiallelic variants", multiallelic);
-    log::info!("Skipped {} monomorphic variants in pop A", monom_gt1);
-    log::info!("Skipped {} monomorphic variants in pop B", monom_gt2);
+    log::info!("Loaded {} variants", pass);
+    log::info!("Skipped {} variants because:", skipped);
+    log::info!(" - {} multiallelic", multiallelic);
+    log::info!(" - {} monomorphic in pop A", monom_gt1);
+    log::info!(" - {} monomorphic in pop B", monom_gt2);
+    log::info!(" - {} all-missing in pop A", miss_gt1);
+    log::info!(" - {} all-missing in pop B", miss_gt2);
     Ok((positions, gt1_data, gt2_data))
 }
 
@@ -243,7 +268,10 @@ fn readthrough_xcf(
     let mut multiallelic = 0;
     let mut monom_gt1 = 0;
     let mut monom_gt2 = 0;
+    let mut miss_gt1 = 0;
+    let mut miss_gt2 = 0;
     let mut pass = 0;
+    let mut skipped = 0;
     let mut tot = 0;
     let (positions, gt1_data, gt2_data): (Vec<_>, Vec<_>, Vec<_>) = reader
         .records()
@@ -259,29 +287,48 @@ fn readthrough_xcf(
             let genotypes = record.genotypes().expect("Cannot fetch the genotypes");
             let gt1 = i1.iter().map(|i| genotypes.get(*i)).collect::<Vec<Genotype>>();
             let gt2 = i2.iter().map(|i| genotypes.get(*i)).collect::<Vec<Genotype>>();
-            // Check that the site is biallelic
-            let alleles1: HashSet<u32> = gt1.iter()
-                .flat_map(|g| g.iter().filter_map(|&a: &GenotypeAllele| a.index()))
-                .collect::<HashSet<u32>>();
 
-            let alleles2: HashSet<u32> = gt2.iter()
+            // Check that the site is biallelic
+            let alleles1: Counter<u32> = gt1.iter()
+                .flat_map(|g| g.iter().filter_map(|&a: &GenotypeAllele| a.index()))
+                .collect::<Counter<u32>>();
+
+            let alleles2: Counter<u32> = gt2.iter()
                 .flat_map(|g| g.iter().filter_map(|a| a.index()))
-                .collect::<HashSet<u32>>();
+                .collect::<Counter<u32>>();
 
             // Union both sets
-            let all_alleles: HashSet<_> = alleles1.union(&alleles2).cloned().collect();
+            let mut all_alleles: Counter<_> = alleles1.clone();
+            all_alleles.extend(&alleles2);
+
+            // Perform filtering and counting
             if all_alleles.len() > 2 {
+                skipped += 1;
                 multiallelic += 1;
                 None
-            } else if alleles1.len() == 1 {
-                monom_gt1 += 1;
-                None
-            } else if alleles2.len() == 1 {
-                monom_gt2 += 1;
+            } else if alleles1.len() == 0 || alleles2.len() == 0 {
+                skipped += 1;
+                if alleles1.len() == 0 {
+                    miss_gt1 += 1;
+                };
+                if alleles2.len() == 0 {
+                    miss_gt2 += 1;
+                };
                 None
             } else {
-                pass += 1;
-                Some((record.pos(), gt1, gt2))
+                if alleles1.len() == 1 || alleles1.values().min().copied()? == 1 || alleles2.len() == 1 || alleles2.values().min().copied()? == 1 {
+                    skipped += 1;
+                    if alleles1.len() == 1 || alleles1.values().min().copied()? == 1 {
+                        monom_gt1 += 1;
+                    };
+                    if alleles2.len() == 1 || alleles2.values().min().copied()? == 1 {
+                        monom_gt2 += 1;
+                    }
+                    None
+                } else {
+                    pass += 1;
+                    Some((record.pos(), gt1, gt2))
+                }
             }
         }).multiunzip();
 
@@ -295,15 +342,19 @@ fn readthrough_xcf(
     if positions.len() as i32 != pass {
         panic!("Inconsistent data")
     };
-    if tot != (pass + multiallelic + monom_gt1 + monom_gt2){
+    println!("{tot} = {pass} {skipped}");
+    if tot != (pass + skipped){
         panic!("Inconsistent counts")
     }
     // Print some info
     log::info!("Processed {} variants", tot);
-    log::info!("Loaded {} variants", positions.len());
-    log::info!("Skipped {} multiallelic variants", multiallelic);
-    log::info!("Skipped {} monomorphic variants in pop A", monom_gt1);
-    log::info!("Skipped {} monomorphic variants in pop B", monom_gt2);
+    log::info!("Loaded {} variants", pass);
+    log::info!("Skipped {} variants because:", skipped);
+    log::info!(" - {} multiallelic", multiallelic);
+    log::info!(" - {} monomorphic in pop A", monom_gt1);
+    log::info!(" - {} monomorphic in pop B", monom_gt2);
+    log::info!(" - {} all-missing in pop A", miss_gt1);
+    log::info!(" - {} all-missing in pop B", miss_gt2);
     Ok((positions, gt1_data, gt2_data))
 }
 
