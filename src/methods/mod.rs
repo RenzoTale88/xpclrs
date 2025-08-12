@@ -99,7 +99,7 @@ pub fn est_omega(q1: &[f32], q2: &[f32]) -> Result<f32> {
     };
     // Compute the omega
     let w = mean(
-        &q1.par_iter()
+        &q1.iter()
             .zip(q2)
             .map(|(p, q)| ((p - q) * (p - q)) / (q * (1f32 - q)))
             .collect::<Vec<f32>>(),
@@ -147,11 +147,11 @@ fn compute_pdens(p1: &[f32], c: f32, p2: f32, var: f32) -> Result<Vec<f32>> {
 
     // left hand side
     let b_term_l = &p1[0..left]
-        .par_iter()
+        .iter()
         .map(|i| (c - i) / (c.powf(2f32)))
         .collect::<Vec<f32>>();
     let c_term_l = &p1[0..left]
-        .par_iter()
+        .iter()
         .map(|i| (i - (c * p2)).powf(2f32) / (2f32 * c.powf(2f32) * var))
         .collect::<Vec<f32>>();
     let l_slice = &mut r[..left];
@@ -161,11 +161,11 @@ fn compute_pdens(p1: &[f32], c: f32, p2: f32, var: f32) -> Result<Vec<f32>> {
 
     // Repeat for right term
     let b_term_r = &p1[right..]
-        .par_iter()
+        .iter()
         .map(|i| (c - i) / (c.powf(2f32)))
         .collect::<Vec<f32>>();
     let c_term_r = &p1[right..]
-        .par_iter()
+        .iter()
         .map(|i| (i - (c * p2)).powf(2f32) / (2f32 * c.powf(2f32) * var))
         .collect::<Vec<f32>>();
     let r_slice = &mut r[right..];
@@ -182,7 +182,7 @@ pub fn pdens_binomial(p1: &[f32], xj: u64, nj: u64, c: f32, p2: f32, var: f32) -
 
     // Apply binomial function
     let binomials = p1
-        .par_iter()
+        .iter()
         .zip(dens)
         .map(|(p, d)| {
             d * Binomial::new(*p as f64, nj)
@@ -494,7 +494,7 @@ fn get_window(
 // Compute A1/A2 counts and A2 frequency
 fn gt_to_af(gt_m: &[Vec<Genotype>]) -> Result<(Vec<u32>, Vec<u64>, Vec<u64>, Vec<f32>)> {
     let vals: Vec<(u32, u64, u64, f32)> = gt_m
-        .par_iter()
+        .iter()
         .map(|gts| {
             let counts = gts
                 .iter()
@@ -703,7 +703,7 @@ pub fn xpclr(
     (bpositions, geneticd, windows): (Vec<usize>, Vec<f32>, Vec<(usize, usize)>), // Positions
     (ldcutoff, phased): (Option<f32>, Option<bool>), // LD-related
     (maxsnps, minsnps): (usize, usize),                   // Size/count filters
-) -> Result<()> {
+) -> Result<Vec<(usize, (usize, usize, usize, usize), (f32, f32, f32))>> {
     let sel_coeffs = vec![
         0.0, 0.00001, 0.00005, 0.0001, 0.0002, 0.0004, 0.0006, 0.0008, 0.001, 0.003, 0.005, 0.01,
         0.05, 0.08, 0.1, 0.15,
@@ -722,18 +722,19 @@ pub fn xpclr(
     log::info!("Omega: {w}");
 
     // Process each window
-    let _: Vec<_> = windows
+    let results: Vec<(usize, (usize, usize, usize, usize), (f32, f32, f32))> = windows
         // Parallellize by window
         .par_iter()
         .enumerate()
         .map(|(n, (start, stop))| {
             let (ix, n_avail) = get_window(&bpositions, *start, *stop, maxsnps).expect("Cannot find the window");
+            let n_snps = ix.len();
             let max_ix = ix.iter().last().unwrap_or(&0_usize).to_owned();
-            log::debug!("Window ID: {n}; Window BP interval: {start}-{stop}; N SNPs selected: {}; N SNP available: {n_avail}", ix.len());
-            println!("Window ID: {n}; Window BP interval: {start}-{stop}; N SNPs selected: {}; N SNP available: {n_avail}", ix.len());
-            if ix.len() < minsnps {
+            log::debug!("Window idx: {n}; Window BP interval: {start}-{stop}; N SNPs selected: {}; N SNP available: {n_avail}", n_snps);
+            println!("Window BP interval: {start}-{stop}; N SNPs selected: {}; N SNP available: {n_avail}", n_snps);
+            if n_snps < minsnps {
                 let xpclr_vals = (f32::NAN, f32::NAN, f32::NAN);
-                ((*start as usize, *stop as usize), xpclr_vals)
+                (n, (*start as usize, *stop as usize, n_snps, n_avail), xpclr_vals)
             } else {
                 let bpi = bpositions[ix[0]];
                 let bpe = bpositions[max_ix];
@@ -755,13 +756,11 @@ pub fn xpclr(
                     &sel_coeffs,
                     Some(0)
                 ).expect("Failed computing XP-CLR for window");
-
-                ((bpi, bpe), xpclr_vals)
+                (n, (bpi, bpe, n_snps, n_avail), xpclr_vals)
             }
         })
         .collect();
-
-    Ok(())
+    Ok(results)
 }
 
 /*
