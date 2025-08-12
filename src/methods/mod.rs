@@ -478,7 +478,8 @@ fn get_window(
     let stop_ix = pos.binary_search(&stop).unwrap_or_else(|i| i);
     if (stop_ix - start_ix) > max_pos_size {
         // The window has too many sites; randomly select some
-        let mut ix: Vec<usize> = pos
+        let mut ix: Vec<usize> = (start_ix..stop_ix)
+            .collect::<Vec<usize>>()
             .choose_multiple(&mut rand::rng(), max_pos_size)
             .cloned()
             .collect::<Vec<usize>>();
@@ -727,15 +728,15 @@ pub fn xpclr(
         .enumerate()
         .map(|(n, (start, stop))| {
             let (ix, n_avail) = get_window(&bpositions, *start, *stop, maxsnps).expect("Cannot find the window");
-            let max_ix = ix.iter().max().unwrap_or(&0_usize).to_owned();
+            let max_ix = ix.iter().last().unwrap_or(&0_usize).to_owned();
             log::debug!("Window ID: {n}; Window BP interval: {start}-{stop}; N SNPs selected: {}; N SNP available: {n_avail}", ix.len());
+            println!("Window ID: {n}; Window BP interval: {start}-{stop}; N SNPs selected: {}; N SNP available: {n_avail}", ix.len());
             if ix.len() < minsnps {
                 let xpclr_vals = (f32::NAN, f32::NAN, f32::NAN);
-                println!("Window ID: {n}; Window BP interval: {start}-{stop}; N SNPs selected: {}; N SNP available: {n_avail}; {xpclr_vals:?}", ix.len());
                 ((*start as usize, *stop as usize), xpclr_vals)
             } else {
                 let bpi = bpositions[ix[0]];
-                let bpe = bpositions[max_ix.to_owned()];
+                let bpe = bpositions[max_ix];
                 // Do not clone, just refer to them
                 let (gt_range, ar_range, gd_range, a1_range, t1_range, p2freqs): (Vec<&Vec<Genotype>>, Vec<u32>, Vec<f32>, Vec<u64>, Vec<u64>, Vec<f32>) = ix.iter().map(|&i| (&gt2[i], &ar[i], &geneticd[i], &t1[i], &a1[i], &q2[i])).multiunzip();
                 // Compute distances from the average gen. dist.
@@ -754,7 +755,6 @@ pub fn xpclr(
                     &sel_coeffs,
                     Some(0)
                 ).expect("Failed computing XP-CLR for window");
-                println!("Window ID: {n}; Window BP interval: {start}-{stop} ({bpi}-{bpe}); N SNPs selected: {}; N SNP available: {n_avail}; {xpclr_vals:?}", ix.len());
 
                 ((bpi, bpe), xpclr_vals)
             }
