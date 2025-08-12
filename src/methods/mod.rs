@@ -2,6 +2,8 @@
 This module provides the functions required to compute the XP-CLR.
 */
 use anyhow::Result;
+use counter::Counter;
+use itertools::MultiUnzip;
 use quad_rs::{EvaluationError, Integrable, Integrator};
 use rand::prelude::IndexedRandom;
 use rayon::prelude::*;
@@ -13,7 +15,7 @@ use rust_htslib::bcf::{
 use scirs2_integrate::romberg::{romberg, RombergOptions};
 use statistical::mean;
 use statrs::distribution::{Binomial, Discrete};
-use std::f32::consts::PI;
+use std::f32::{consts::PI, NAN};
 
 // Drafted bisect left and right
 pub struct Bisector<'a, T> {
@@ -94,7 +96,7 @@ impl<'a, T: PartialOrd> PartialBisector<'a, T> {
 }
 
 // Compute the omega
-pub fn omega_est(q1: &[f32], q2: &[f32]) -> Result<f32> {
+pub fn est_omega(q1: &[f32], q2: &[f32]) -> Result<f32> {
     if q2.contains(&0.0) || q2.contains(&1.0) {
         eprintln!("No SNPs in p2 can be fixed.");
         std::process::exit(1);
@@ -431,7 +433,7 @@ fn compute_complikelihood(
     }
 }
 
-fn _compute_xpclr(
+fn compute_xpclr(
     counts: (&[u64], &[u64]),
     rds: &[f32],
     p2freqs: &[f32],
@@ -468,12 +470,13 @@ fn _compute_xpclr(
     Ok((-maximum_li, -null_model_li, maxli_sc))
 }
 
-fn _window(
+// Define indexes of variants in the window
+fn get_window(
     pos: &[usize],
     start: usize,
     stop: usize,
     max_pos_size: usize,
-) -> Result<(Vec<usize>, (usize, usize))> {
+) -> Result<(Vec<usize>, usize)> {
     // Define start index
     let start_ix = pos.binary_search(&start).unwrap_or_else(|i| i);
     let stop_ix = pos.binary_search(&stop).unwrap_or_else(|i| i);
@@ -484,30 +487,370 @@ fn _window(
             .cloned()
             .collect::<Vec<usize>>();
         ix.sort();
-        Ok((ix, (start_ix, stop_ix)))
+        Ok((ix, stop_ix - start_ix))
     } else {
         let ix = (start_ix..stop_ix).step_by(1).collect::<Vec<usize>>();
-        Ok((ix, (start_ix, stop_ix)))
+        Ok((ix, stop_ix - start_ix))
     }
 }
 
-// To be done after having had a peek into how htslib manages the genotypes
-fn _weights(_ldcutoff: f32, _isphased: bool) -> Result<f32> {
-    Ok(0.0)
+// Compute A1/A2 counts and A2 frequency
+fn gt_to_af(gt_m: &[Vec<Genotype>]) -> Result<(Vec<u32>, Vec<u64>, Vec<u64>, Vec<f32>)> {
+    let vals: Vec<(u32, u64, u64, f32)> = gt_m
+        .par_iter()
+        .map(|gts| {
+            let counts = gts
+                .iter()
+                .flat_map(|gt| gt.iter().filter_map(|a| a.index()))
+                .collect::<Counter<u32>>();
+            let tot_counts: usize = counts.values().sum();
+            let ref_allele = counts
+                .keys()
+                .min()
+                .expect("Can't compute the minor allele count");
+            let ref_counts = counts
+                .get(ref_allele)
+                .expect("Cannot compute ref allele frequency");
+            let alt_counts = (tot_counts - ref_counts) as f32;
+            (
+                *ref_allele,
+                tot_counts as u64,
+                alt_counts as u64,
+                alt_counts / (tot_counts as f32),
+            )
+        })
+        .collect();
+    Ok(vals.into_iter().multiunzip())
+}
+
+// Kindly provided by Perplexity
+fn rogers_huff_r_gt(gt: &Vec<Vec<i32>>) -> Result<Vec<Vec<f32>>> {
+    // Number of variants and individuals
+    let n_variants = gt.len();
+    if n_variants < 2 {
+        panic!("Need at least two variants to calculate LD");
+    }
+    let n_individuals = gt[0].len();
+
+    // Calculate allele frequencies per variant, ignoring missing (-9)
+    let mut p = vec![0.0_f32; n_variants];
+    let mut call_counts = vec![0_usize; n_variants];
+    for (i, variant) in gt.iter().enumerate() {
+        let mut sum_alleles = 0_u64;
+        let mut calls = 0;
+        for &g in variant.iter() {
+            if g != -9 {
+                sum_alleles += g as u64;
+                calls += 1;
+            }
+        }
+        p[i] = if calls > 0 {
+            (sum_alleles as f32) / (2.0 * calls as f32)
+        } else {
+            0.0
+        };
+        call_counts[i] = calls;
+    }
+
+    // Find minimum number of valid samples across variants for denominator
+    let n = *call_counts.iter().min().unwrap_or(&0);
+    if n == 0 {
+        panic!("No valid genotype calls found");
+    }
+    let n = n as f32;
+
+    // Center genotypes by subtracting 2p, replacing missing with zero for calculation
+    let mut centered: Vec<Vec<f32>> = vec![vec![0.0; n_individuals]; n_variants];
+    for (i, variant) in gt.iter().enumerate() {
+        for (j, &g) in variant.iter().enumerate() {
+            centered[i][j] = if g == -9 { 0.0 } else { g as f32 - 2.0 * p[i] };
+        }
+    }
+
+    // Compute covariance matrix (only need [0,1] if two variants)
+    // cov_ij = sum_k centered_i[k] * centered_j[k] / n (sum over individuals)
+    let mut cov = vec![vec![0.0; n_variants]; n_variants];
+    for i in 0..n_variants {
+        for j in i..n_variants {
+            let mut s = 0.0;
+            for k in 0..n_individuals {
+                s += centered[i][k] * centered[j][k];
+            }
+            s /= n;
+            cov[i][j] = s;
+            cov[j][i] = s;
+        }
+    }
+
+    // Rogers-Huff r correlation between each variant
+    let mut rh_r: Vec<Vec<f32>> = vec![vec![0.0; n_variants]; n_variants];
+    for i in 0..(n_variants - 1) {
+        for j in (i + 1)..n_variants {
+            // Variances on diagonal
+            let var0 = cov[i][i];
+            let var1 = cov[j][j];
+            if var0 <= 0.0 || var1 <= 0.0 {
+                panic!("Non-positive variance encountered");
+            }
+            let r = cov[i][j] / (var0.sqrt() * var1.sqrt());
+            rh_r[i][j] = r.powi(2);
+            rh_r[j][i] = r.powi(2);
+        }
+    }
+    Ok(rh_r)
+}
+
+fn rogers_huff_r_ht(ht: &Vec<Vec<i32>>) -> Result<Vec<Vec<f32>>> {
+    let n_variants = ht.len();
+    if n_variants < 2 {
+        panic!("Need at least two variants to calculate LD");
+    }
+    let n_haplotypes = ht[0].len();
+
+    // Calculate allele frequency per variant (mean over haplotypes)
+    let mut p = vec![0.0_f32; n_variants];
+    let mut valid_counts = vec![0_usize; n_variants];
+
+    for (i, hap) in ht.iter().enumerate() {
+        let mut sum_alleles = 0.0;
+        let mut calls = 0;
+        for &h in hap.iter() {
+            if h != -9 {
+                sum_alleles += h as f32;
+                calls += 1;
+            }
+        }
+        p[i] = if calls > 0 {
+            sum_alleles / calls as f32
+        } else {
+            0.0
+        };
+        valid_counts[i] = calls;
+    }
+
+    // Minimum valid sample size across variants
+    let n = *valid_counts.iter().min().unwrap_or(&0);
+    if n == 0 {
+        panic!("No valid haplotype calls found");
+    }
+    let n = n as f32;
+
+    // Center haplotypes (subtract p, set missing to 0 so they don’t contribute)
+    let mut centered: Vec<Vec<f32>> = vec![vec![0.0; n_haplotypes]; n_variants];
+    for (i, hap) in ht.iter().enumerate() {
+        for (j, &h) in hap.iter().enumerate() {
+            if h != -9 {
+                centered[i][j] = h as f32 - p[i];
+            } else {
+                // Missing -> contribute 0 to covariance sum
+                centered[i][j] = 0.0;
+            }
+        }
+    }
+
+    // Covariance between first two variants
+    // Rogers-Huff r correlation between each variant
+    let mut rh_r: Vec<Vec<f32>> = vec![vec![0.0; n_variants]; n_variants];
+    for i in 0..(n_variants - 1) {
+        for j in (i + 1)..n_variants {
+            // Variances on diagonal
+            let mut cov = 0.0;
+            let mut var0 = 0.0;
+            let mut var1 = 0.0;
+            for k in 0..n_haplotypes {
+                cov += centered[i][k] * centered[j][k];
+                var0 += centered[i][k].powi(2);
+                var1 += centered[j][k].powi(2);
+            }
+            cov /= n;
+            var0 /= n;
+            var1 /= n;
+
+            if var0 <= 0.0 || var1 <= 0.0 {
+                panic!("Non-positive variance encountered");
+            }
+            let r = cov / (var0.sqrt() * var1.sqrt());
+            rh_r[i][j] = r.powi(2);
+            rh_r[j][i] = r.powi(2);
+        }
+    }
+    Ok(rh_r)
+}
+
+// Convert genotypes in the appropriate form
+fn gt2haplotypes(gt_m: Vec<&Vec<Genotype>>) -> Vec<Vec<i32>> {
+    gt_m.iter()
+        .map(|gts| {
+            gts.iter()
+                .flat_map(|gt| {
+                    gt.iter()
+                        .map(|a| match a {
+                            GenotypeAllele::PhasedMissing => -9 as i32,
+                            GenotypeAllele::UnphasedMissing => -9 as i32,
+                            _ => a.index().unwrap() as i32,
+                        })
+                        .collect::<Vec<i32>>()
+                })
+                .collect::<Vec<i32>>()
+        })
+        .collect::<Vec<Vec<i32>>>()
+}
+
+// Genotypes to counts
+fn gt2gcounts(gt_m: Vec<&Vec<Genotype>>, ref_all: Vec<u32>) -> Vec<Vec<i32>> {
+    gt_m.iter()
+        .zip(ref_all.iter()) // iter over (Vec<Genotype>, &u32 ref allele index)
+        .map(|(gts, &ref_ix)| {
+            gts.iter()
+                .map(|gt| {
+                    // Extract allele indices, ignoring missing
+                    let alleles: Vec<u32> = gt
+                        .iter()
+                        .filter_map(|a| a.index()) // skip missing
+                        .collect();
+
+                    if alleles.is_empty() {
+                        // All missing
+                        -9
+                    } else {
+                        // Count how many are NOT the ref allele
+                        let alt_count = alleles.iter().filter(|&&ix| ix != ref_ix).count() as i32;
+
+                        if alt_count == 0 {
+                            0
+                        } else {
+                            alt_count
+                        }
+                    }
+                })
+                .collect()
+        })
+        .collect()
+}
+
+// LD cutoff
+fn apply_cutoff(matrix: &Vec<Vec<f32>>, cutoff: f32) -> Vec<Vec<bool>> {
+    matrix
+        .iter()
+        .map(|row| {
+            row.iter()
+                .map(|&val| {
+                    let cond1 = val > cutoff; // ld**2 > cutoff
+                    let cond2 = val.is_nan(); // np.isnan(ld)
+                    cond1 || cond2 // elementwise OR
+                })
+                .collect()
+        })
+        .collect()
+}
+
+// Compute the variant weight
+fn compute_weights(
+    gt_m: Vec<&Vec<Genotype>>,
+    ref_all: Vec<u32>,
+    ldcutoff: f32,
+    isphased: bool,
+) -> Result<Vec<f32>> {
+    // First create a matrix that can be used to compute the LD
+    let d = if isphased {
+        gt2haplotypes(gt_m)
+    } else {
+        gt2gcounts(gt_m, ref_all)
+    };
+
+    // Compute the R2
+    let ld = if isphased {
+        rogers_huff_r_ht(&d)
+    } else {
+        rogers_huff_r_gt(&d)
+    }
+    .expect("Cannot compute LD");
+
+    // Apply cutoff
+    let above_cut = apply_cutoff(&ld, ldcutoff);
+
+    // Return weight for each site
+    let weights = above_cut
+        .iter()
+        .map(|v| {
+            let summa: f32 = v
+                .into_iter()
+                .map(|b| match b {
+                    true => 1_f32,
+                    false => 0_f32,
+                })
+                .sum();
+            1_f32 / (summa + 1.0)
+        })
+        .collect::<Vec<f32>>();
+    Ok(weights)
 }
 
 // Main XP-CLR caller
-fn xpclr(
-    (gt1, gt2): (Vec<Vec<Genotype>>, Vec<Vec<Genotype>>),
-    (bpositions, windows): (Vec<u64>, Vec<(usize, usize)>),
-    geneticd: Option<Vec<f32>>,
-    (ldcutoff, phased, rrate): (Option<f32>, Option<bool>, Option<f32>),
-    (maxsnps, minsnps): (Option<usize>, Option<usize>),
+pub fn xpclr(
+    (gt1, gt2): (Vec<Vec<Genotype>>, Vec<Vec<Genotype>>), // Genotypes
+    (bpositions, geneticd, windows): (Vec<usize>, Vec<f32>, Vec<(usize, usize)>), // Positions
+    (ldcutoff, phased, rrate): (Option<f32>, Option<bool>, Option<f32>), // LD-related
+    (maxsnps, minsnps): (usize, usize),                   // Size/count filters
 ) -> Result<()> {
-    let sel_coefs = vec![
+    let sel_coeffs = vec![
         0.0, 0.00001, 0.00005, 0.0001, 0.0002, 0.0004, 0.0006, 0.0008, 0.001, 0.003, 0.005, 0.01,
         0.05, 0.08, 0.1, 0.15,
     ];
+    let ldcutoff = ldcutoff.unwrap_or(0.95f32);
+    let rrate = rrate.unwrap_or(1e-8f32);
+    let isphased = phased.unwrap_or(false);
+
+    // Get the allele frequencies first
+    let (ar, t1, a1, q1) = gt_to_af(&gt1).expect("Failed to copmute the AF for pop 1");
+    let (_, _t2, _a2, q2) = gt_to_af(&gt2).expect("Failed to copmute the AF for pop 1");
+
+    // Compute genetic distances
+
+    // Then, let's compute the omega
+    let w = est_omega(&q1, &q2).expect("Cannot compute omega");
+    log::info!("Omega: {w}");
+
+    // Process each window
+    let _: Vec<_> = windows
+        // Parallellize by window
+        .par_iter()
+        .enumerate()
+        .map(|(n, (start, stop))| {
+            let (ix, n_avail) = get_window(&bpositions, *start, *stop, maxsnps).expect("Cannot find the window");
+            let bpi = bpositions[ix[0]];
+            let bpe = bpositions[ix[1]];
+            log::debug!("Window ID: {n}; Window BP interval: {start}-{stop}; N SNPs selected: {}; N SNP available: {n_avail}", ix.len());
+            if ix.len() < minsnps {
+                let xpclr_vals = (f32::NAN, f32::NAN, f32::NAN);
+                println!("{bpi} {bpe} {xpclr_vals:?}");
+                ((bpi, bpe), xpclr_vals)
+            } else {
+                // Do not clone, just refer to them
+                let (gt_range, ar_range, rds, a1_range, t1_range, p2freqs): (Vec<&Vec<Genotype>>, Vec<u32>, Vec<f32>, Vec<u64>, Vec<u64>, Vec<f32>) = ix.iter().map(|&i| (&gt2[i], &ar[i], &geneticd[i], &t1[i], &a1[i], &q2[i])).multiunzip();
+                // Compute distances from the average gen. dist.
+                let mdist = mean(&rds);
+                let dists_range = rds.iter().map(|d| d - mdist ).collect::<Vec<f32>>();
+                // Compute the weights
+                let weights = compute_weights(gt_range, ar_range, ldcutoff, isphased).expect("Failed to compute the weights");
+                let omegas = vec![w; rds.len()];
+                // Compute XP-CLR
+                let xpclr_vals = compute_xpclr(
+                    (&a1_range, &t1_range),
+                    &rds,
+                    &p2freqs,
+                    &weights,
+                    &omegas,
+                    &sel_coeffs,
+                    Some(0)
+                ).expect("Failed computing XP-CLR for window");
+                println!("{bpi} {bpe} {xpclr_vals:?}");
+
+                ((bpi, bpe), xpclr_vals)
+            }
+        })
+        .collect();
+
     Ok(())
 }
 

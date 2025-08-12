@@ -1,6 +1,9 @@
 use clap::{value_parser, Arg, Command};
 use env_logger::{self, Env};
-use xpclrs::io::{process_xcf, read_file};
+use xpclrs::{
+    io::{process_xcf, read_file},
+    methods::xpclr,
+};
 
 /*
  --format FORMAT, -F FORMAT
@@ -71,7 +74,7 @@ fn main() {
                     .short('m')
                     .required(false)
                     .default_value("200")
-                    .value_parser(value_parser!(i32))
+                    .value_parser(value_parser!(u64))
                     .help("Max SNPs in a window."),
             )
             .arg(
@@ -80,7 +83,7 @@ fn main() {
                     .short('N')
                     .required(false)
                     .default_value("10")
-                    .value_parser(value_parser!(i32))
+                    .value_parser(value_parser!(u64))
                     .help("Min SNPs in a window."),
             )
             .arg(
@@ -95,7 +98,7 @@ fn main() {
                 Arg::new("START")
                     .long("start")
                     .required(false)
-                    .default_value("1")
+                    .default_value("0")
                     .value_parser(value_parser!(u64))
                     .help("Start position for the sliding windows."),
             )
@@ -118,7 +121,7 @@ fn main() {
                 Arg::new("CHROM")
                     .short('C')
                     .long("chr")
-                    .required(false)
+                    .required(true)
                     .help("Chromosome to analyse."),
             )
             .arg(Arg::new("DISTKEYS").long("gdistkey").required(false).help(
@@ -144,7 +147,13 @@ fn main() {
         .expect("Invalid chromosome code")
         .to_owned();
     let start = matches.get_one::<u64>("START").map(|&x| x);
+    let step = matches.get_one::<u64>("STEP").map(|&x| x).unwrap();
     let end = matches.get_one::<u64>("STOP").map(|&x| x);
+    let minsnps = matches.get_one::<u64>("MINSNPS").map(|&x| x).unwrap();
+    let maxsnps = matches.get_one::<u64>("MAXSNPS").map(|&x| x).unwrap();
+    let ldcutoff = matches.get_one::<f32>("LDCUTOFF").map(|&x| x);
+    let rrate = matches.get_one::<f32>("RECRATE").map(|&x| x);
+    let phased = matches.get_one::<bool>("PHASED").map(|&x| x);
 
     // Get the VCF
     let xcf_path = matches
@@ -179,9 +188,26 @@ fn main() {
         .collect::<Vec<String>>();
 
     // Load VCF file
-    let (positions, gt1_data, gt2_data) =
-        process_xcf(xcf_path, &samples_a, &samples_b, chrom, start, end, None)
-            .expect("Failed to read the VCF/BCF file");
+    let (positions, gt1, gt2, gdistances) = process_xcf(
+        xcf_path,
+        &samples_a,
+        &samples_b,
+        chrom,
+        start,
+        end,
+        (rrate, None),
+    )
+    .expect("Failed to read the VCF/BCF file");
+
+    // Establish the windows
+    let end = match end {
+        Some(v) => v,
+        None => *positions.iter().max().unwrap() as u64,
+    };
+    let windows = (start.unwrap()..end)
+        .step_by(step as usize)
+        .map(|v| (v as usize, (v + step) as usize))
+        .collect::<Vec<(usize, usize)>>();
 
     // Define thread pool
     let pool = rayon::ThreadPoolBuilder::new()
@@ -192,6 +218,12 @@ fn main() {
     // Demo
     let p1: Vec<f32> = vec![0.001, 0.0002, 0.01, 0.4, 0.9];
     pool.install(|| {
+        let _ = xpclr(
+            (gt1, gt2),
+            (positions, gdistances, windows),
+            (ldcutoff, phased, rrate),
+            (maxsnps as usize, minsnps as usize),
+        );
         // Code here runs using at most num_threads threads
         // For example, a parallel iterator:
         log::info!(target: "xpclr", "Harding likelihood: {p1:?}");
