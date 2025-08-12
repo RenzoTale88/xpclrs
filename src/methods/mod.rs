@@ -7,15 +7,11 @@ use itertools::MultiUnzip;
 use quad_rs::{EvaluationError, Integrable, Integrator};
 use rand::prelude::IndexedRandom;
 use rayon::prelude::*;
-use rust_htslib::bcf::{
-    self,
-    record::{Genotype, GenotypeAllele},
-    IndexedReader, Read, Reader,
-};
+use rust_htslib::bcf::record::{Genotype, GenotypeAllele};
 use scirs2_integrate::romberg::{romberg, RombergOptions};
 use statistical::mean;
 use statrs::distribution::{Binomial, Discrete};
-use std::f32::{consts::PI, NAN};
+use std::f32::{consts::PI};
 
 // Drafted bisect left and right
 pub struct Bisector<'a, T> {
@@ -790,7 +786,7 @@ fn compute_weights(
 pub fn xpclr(
     (gt1, gt2): (Vec<Vec<Genotype>>, Vec<Vec<Genotype>>), // Genotypes
     (bpositions, geneticd, windows): (Vec<usize>, Vec<f32>, Vec<(usize, usize)>), // Positions
-    (ldcutoff, phased, rrate): (Option<f32>, Option<bool>, Option<f32>), // LD-related
+    (ldcutoff, phased): (Option<f32>, Option<bool>), // LD-related
     (maxsnps, minsnps): (usize, usize),                   // Size/count filters
 ) -> Result<()> {
     let sel_coeffs = vec![
@@ -798,7 +794,6 @@ pub fn xpclr(
         0.05, 0.08, 0.1, 0.15,
     ];
     let ldcutoff = ldcutoff.unwrap_or(0.95f32);
-    let rrate = rrate.unwrap_or(1e-8f32);
     let isphased = phased.unwrap_or(false);
 
     // Get the allele frequencies first
@@ -818,8 +813,9 @@ pub fn xpclr(
         .enumerate()
         .map(|(n, (start, stop))| {
             let (ix, n_avail) = get_window(&bpositions, *start, *stop, maxsnps).expect("Cannot find the window");
+            let max_ix = ix.iter().max().unwrap();
             let bpi = bpositions[ix[0]];
-            let bpe = bpositions[ix[1]];
+            let bpe = bpositions[max_ix.to_owned()];
             log::debug!("Window ID: {n}; Window BP interval: {start}-{stop}; N SNPs selected: {}; N SNP available: {n_avail}", ix.len());
             if ix.len() < minsnps {
                 let xpclr_vals = (f32::NAN, f32::NAN, f32::NAN);
@@ -827,10 +823,10 @@ pub fn xpclr(
                 ((bpi, bpe), xpclr_vals)
             } else {
                 // Do not clone, just refer to them
-                let (gt_range, ar_range, rds, a1_range, t1_range, p2freqs): (Vec<&Vec<Genotype>>, Vec<u32>, Vec<f32>, Vec<u64>, Vec<u64>, Vec<f32>) = ix.iter().map(|&i| (&gt2[i], &ar[i], &geneticd[i], &t1[i], &a1[i], &q2[i])).multiunzip();
+                let (gt_range, ar_range, gd_range, a1_range, t1_range, p2freqs): (Vec<&Vec<Genotype>>, Vec<u32>, Vec<f32>, Vec<u64>, Vec<u64>, Vec<f32>) = ix.iter().map(|&i| (&gt2[i], &ar[i], &geneticd[i], &t1[i], &a1[i], &q2[i])).multiunzip();
                 // Compute distances from the average gen. dist.
-                let mdist = mean(&rds);
-                let dists_range = rds.iter().map(|d| d - mdist ).collect::<Vec<f32>>();
+                let mdist = mean(&gd_range);
+                let rds = gd_range.iter().map(|d| d - mdist ).collect::<Vec<f32>>();
                 // Compute the weights
                 let weights = compute_weights(gt_range, ar_range, ldcutoff, isphased).expect("Failed to compute the weights");
                 let omegas = vec![w; rds.len()];
@@ -855,81 +851,6 @@ pub fn xpclr(
 }
 
 /*
-def determine_weights(genotypes, ldcutoff, isphased=False):
-
-    if isphased:
-        d = genotypes.to_haplotypes()
-    else:
-        d = genotypes.to_n_alt(fill=0)
-
-    # nans are possible, but rare, ie where only alts in A are at positions
-    # missing in B. We consider these sites in LD and they are dropped.
-    ld = allel.stats.ld.rogers_huff_r(d[:])
-
-    above_cut = (squareform(ld**2) > ldcutoff) | (squareform(np.isnan(ld)))
-
-    # add one as self ld reported as 0
-    return 1/(1 + np.sum(above_cut, axis=1))
-
-
-def xpclr_scan(gt1, gt2, bpositions, windows, geneticd=None, ldcutoff=0.95,
-               phased=False, maxsnps=200, minsnps=10, rrate=1e-8,
-               sel_coefs=(0.0, 0.00001, 0.00005, 0.0001, 0.0002, 0.0004, 0.0006,
-                          0.0008, 0.001, 0.003, 0.005, 0.01, 0.05, 0.08, 0.1,
-                          0.15)):
-
-    if geneticd is None:
-        geneticd = bpositions * rrate
-        logger.info("No genetic distance provided; using rrate of {0}/bp".format(rrate))
-
-    assert minsnps >= 2, "Minimum SNPs cannot be set at any fewer than 2"
-
-    ac1 = gt1.count_alleles()
-    ac2 = gt2.count_alleles()
-    w = estimate_omega(q1=ac1.to_frequencies()[:, 1],
-                       q2=ac2.to_frequencies()[:, 1])
-    logger.info("Omega estimated as : {0:3f}".format(w))
-
-    count_calls = ac1.sum(axis=1)[:]
-    count_alt = ac1[:, 1]
-    p2_freqs = ac2.to_frequencies()[:, 1]
-
-    li_data = np.zeros((windows.shape[0], 3))
-    nsnp = np.zeros(windows.shape[0], dtype="int")
-    nsnp_avail = np.zeros(windows.shape[0], dtype="int")
-    ixspan = np.zeros(windows.shape, dtype="int")
-
-    for i, (start, end) in enumerate(windows):
-
-        if 0 == (i % 10):
-            logger.debug("Processing window {0}/{1}...".format(i + 1, windows.shape[0]))
-
-        ix, n_avail = determine_window(bpositions, start, end, maxsnps)
-
-        nsnp[i] = ix.size
-        nsnp_avail[i] = n_avail
-
-        if nsnp[i] < minsnps:
-            # if not enough data in window, skip
-            li_data[i] = np.repeat(np.nan, 3)
-            continue
-
-        ixspan[i] = np.take(bpositions, (ix[0], ix[-1]))
-
-        weights = determine_weights(gt2.take(ix, axis=0), ldcutoff=ldcutoff,
-                                    isphased=phased)
-
-        dq = np.take(geneticd, ix)
-        distance = np.abs(dq - dq.mean())
-
-        # combine_arrays into single array for easier passing
-        window_data = np.vstack((count_alt.take(ix, axis=0),
-                                 count_calls.take(ix, axis=0),
-                                 distance, p2_freqs.take(ix),
-                                 np.repeat(w, distance.size),
-                                 weights)).T
-
-        li_data[i] = compute_xpclr(window_data, sel_coefs)
 
     # modelL, nullL, selcoef, n snps, actual window edges.
     return li_data.T[0], li_data.T[1], li_data.T[2], nsnp, nsnp_avail, ixspan

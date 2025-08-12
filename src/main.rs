@@ -221,7 +221,7 @@ fn main() {
         let _ = xpclr(
             (gt1, gt2),
             (positions, gdistances, windows),
-            (ldcutoff, phased, rrate),
+            (ldcutoff, phased),
             (maxsnps as usize, minsnps as usize),
         );
         // Code here runs using at most num_threads threads

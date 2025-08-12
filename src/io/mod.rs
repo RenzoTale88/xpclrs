@@ -4,9 +4,7 @@ This module provides the I/O functions (e.g. VCF/BCF readers, text readers etc).
 use anyhow::Result;
 use counter::Counter;
 use itertools::MultiUnzip;
-use rayon::prelude::*;
 use rust_htslib::{
-    bam::record,
     bcf::{
         self,
         record::{Genotype, GenotypeAllele},
