@@ -142,7 +142,7 @@ fn indexed_xcf(
     let _ = reader.fetch(rid, start, end);
     // Load the records, defining the counters of how many sites we skip
     let mut multiallelic = 0;
-    let mut monom_gt1 = 0;
+    // let mut monom_gt1 = 0;
     let mut monom_gt2 = 0;
     let mut miss_gt1 = 0;
     let mut miss_gt2 = 0;
@@ -193,18 +193,21 @@ fn indexed_xcf(
                 };
                 None
             } else {
-                if alleles1.len() == 1
-                    || alleles1.values().min().copied()? == 1
-                    || alleles2.len() == 1
+                if alleles2.len() == 1
                     || alleles2.values().min().copied()? == 1
+                // if alleles1.len() == 1
+                //     || alleles1.values().min().copied()? == 1
+                //     || alleles2.len() == 1
+                //     || alleles2.values().min().copied()? == 1
                 {
                     skipped += 1;
-                    if alleles1.len() == 1 || alleles1.values().min().copied()? == 1 {
-                        monom_gt1 += 1;
-                    };
-                    if alleles2.len() == 1 || alleles2.values().min().copied()? == 1 {
-                        monom_gt2 += 1;
-                    }
+                    monom_gt2 += 1;
+                    // if alleles1.len() == 1 || alleles1.values().min().copied()? == 1 {
+                    //     monom_gt1 += 1;
+                    // };
+                    // if alleles2.len() == 1 || alleles2.values().min().copied()? == 1 {
+                    //     monom_gt2 += 1;
+                    // }
                     None
                 } else {
                     pass += 1;
@@ -233,7 +236,7 @@ fn indexed_xcf(
     log::info!("Loaded {} variants", pass);
     log::info!("Skipped {} variants because:", skipped);
     log::info!(" - {} multiallelic", multiallelic);
-    log::info!(" - {} monomorphic in pop A", monom_gt1);
+    // log::info!(" - {} monomorphic in pop A", monom_gt1);
     log::info!(" - {} monomorphic in pop B", monom_gt2);
     log::info!(" - {} all-missing in pop A", miss_gt1);
     log::info!(" - {} all-missing in pop B", miss_gt2);
@@ -290,7 +293,7 @@ fn readthrough_xcf(
 
     // Load the records, defining the counters of how many sites we skip
     let mut multiallelic = 0;
-    let mut monom_gt1 = 0;
+    // let mut monom_gt1 = 0;
     let mut monom_gt2 = 0;
     let mut miss_gt1 = 0;
     let mut miss_gt2 = 0;
@@ -347,18 +350,21 @@ fn readthrough_xcf(
                 };
                 None
             } else {
-                if alleles1.len() == 1
-                    || alleles1.values().min().copied()? == 1
-                    || alleles2.len() == 1
+                // if alleles1.len() == 1
+                //     || alleles1.values().min().copied()? == 1
+                //     || alleles2.len() == 1
+                //     || alleles2.values().min().copied()? == 1
+                if alleles2.len() == 1
                     || alleles2.values().min().copied()? == 1
                 {
                     skipped += 1;
-                    if alleles1.len() == 1 || alleles1.values().min().copied()? == 1 {
-                        monom_gt1 += 1;
-                    };
-                    if alleles2.len() == 1 || alleles2.values().min().copied()? == 1 {
-                        monom_gt2 += 1;
-                    }
+                    monom_gt2 += 1;
+                    // if alleles1.len() == 1 || alleles1.values().min().copied()? == 1 {
+                    //     monom_gt1 += 1;
+                    // };
+                    // if alleles2.len() == 1 || alleles2.values().min().copied()? == 1 {
+                    //     monom_gt2 += 1;
+                    // }
                     None
                 } else {
                     pass += 1;
@@ -387,7 +393,7 @@ fn readthrough_xcf(
     log::info!("Loaded {} variants", pass);
     log::info!("Skipped {} variants because:", skipped);
     log::info!(" - {} multiallelic", multiallelic);
-    log::info!(" - {} monomorphic in pop A", monom_gt1);
+    // log::info!(" - {} monomorphic in pop A", monom_gt1);
     log::info!(" - {} monomorphic in pop B", monom_gt2);
     log::info!(" - {} all-missing in pop A", miss_gt1);
     log::info!(" - {} all-missing in pop B", miss_gt2);

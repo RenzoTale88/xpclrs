@@ -519,181 +519,100 @@ fn gt_to_af(gt_m: &[Vec<Genotype>]) -> Result<(Vec<u32>, Vec<u64>, Vec<u64>, Vec
     Ok(vals.into_iter().multiunzip())
 }
 
-// Kindly provided by Perplexity
-fn rogers_huff_r_gt(gt: &Vec<Vec<i32>>) -> Result<Vec<Vec<f32>>> {
-    // Number of variants and individuals
-    let n_variants = gt.len();
-    if n_variants < 2 {
-        panic!("Need at least two variants to calculate LD");
-    }
-    let n_individuals = gt[0].len();
+// Attempt to compute the LD using the same method as scikit-allele 
+// [here](https://github.com/cggh/scikit-allel/blob/master/allel/opt/stats.pyx#L90)
+// and [here]()
+fn gn_pairwise_corrcoef_int8(gn: &Vec<Vec<i8>>) -> Result<Vec<Vec<f32>>> {
+    let n = gn.len();
+    // Precompute gn_sq[i][k] = gn[i][k]^2
+    let gn_sq: Vec<Vec<i8>> = gn
+        .iter()
+        .map(|row| row.iter().map(|&v| v * v).collect())
+        .collect();
 
-    // Calculate allele frequencies per variant, ignoring missing (-9)
-    let mut p = vec![0.0_f32; n_variants];
-    let mut call_counts = vec![0_usize; n_variants];
-    for (i, variant) in gt.iter().enumerate() {
-        let mut sum_alleles = 0_u64;
-        let mut calls = 0;
-        for &g in variant.iter() {
-            if g != -9 {
-                sum_alleles += g as u64;
-                calls += 1;
-            }
+    // Create square matrix
+    let mut out = vec![vec![1.0_f32; n]; n];
+
+    // Iterate through the variants
+    for i in 0..(n-1) {
+        for j in (i + 1)..n {
+            let gn0 = &gn[i];
+            let gn1 = &gn[j];
+            let gn0_sq = &gn_sq[i];
+            let gn1_sq = &gn_sq[j];
+
+            let r = gn_corrcoef_int8(gn0, gn1, gn0_sq, gn1_sq);
+            out[i][j] = r;
+            out[j][i] = r;
         }
-        p[i] = if calls > 0 {
-            (sum_alleles as f32) / (2.0 * calls as f32)
-        } else {
-            0.0
-        };
-        call_counts[i] = calls;
-    }
+    };
 
-    // Find minimum number of valid samples across variants for denominator
-    let n = *call_counts.iter().min().unwrap_or(&0);
-    if n == 0 {
-        panic!("No valid genotype calls found");
-    }
-    let n = n as f32;
-
-    // Center genotypes by subtracting 2p, replacing missing with zero for calculation
-    let mut centered: Vec<Vec<f32>> = vec![vec![0.0; n_individuals]; n_variants];
-    for (i, variant) in gt.iter().enumerate() {
-        for (j, &g) in variant.iter().enumerate() {
-            centered[i][j] = if g == -9 { 0.0 } else { g as f32 - 2.0 * p[i] };
-        }
-    }
-
-    // Compute covariance matrix (only need [0,1] if two variants)
-    // cov_ij = sum_k centered_i[k] * centered_j[k] / n (sum over individuals)
-    let mut cov = vec![vec![0.0; n_variants]; n_variants];
-    for i in 0..n_variants {
-        for j in i..n_variants {
-            let mut s = 0.0;
-            for k in 0..n_individuals {
-                s += centered[i][k] * centered[j][k];
-            }
-            s /= n;
-            cov[i][j] = s;
-            cov[j][i] = s;
-        }
-    }
-
-    // Rogers-Huff r correlation between each variant
-    let mut rh_r: Vec<Vec<f32>> = vec![vec![0.0; n_variants]; n_variants];
-    for i in 0..(n_variants - 1) {
-        for j in (i + 1)..n_variants {
-            // Variances on diagonal
-            let var0 = cov[i][i];
-            let var1 = cov[j][j];
-            if var0 <= 0.0 || var1 <= 0.0 {
-                panic!("Non-positive variance encountered");
-            }
-            let r = cov[i][j] / (var0.sqrt() * var1.sqrt());
-            rh_r[i][j] = r.powi(2);
-            rh_r[j][i] = r.powi(2);
-        }
-    }
-    Ok(rh_r)
+    Ok(out)
 }
 
-fn rogers_huff_r_ht(ht: &Vec<Vec<i32>>) -> Result<Vec<Vec<f32>>> {
-    let n_variants = ht.len();
-    if n_variants < 2 {
-        panic!("Need at least two variants to calculate LD");
-    }
-    let n_haplotypes = ht[0].len();
+// Example reimplementation of gn_corrcoef_int8 in Rust
+fn gn_corrcoef_int8(a: &Vec<i8>, b: &Vec<i8>, a_sq: &Vec<i8>, b_sq: &Vec<i8>) -> f32 {
+    // Convert to f32 and compute Pearson correlation
+    let mut m0: f32 = 0.0;
+    let mut m1: f32 = 0.0;
+    let mut v0: f32 = 0.0;
+    let mut v1: f32 = 0.0;
+    let mut cov: f32 = 0.0;
+    let mut n: f32 = 0.0;
 
-    // Calculate allele frequency per variant (mean over haplotypes)
-    let mut p = vec![0.0_f32; n_variants];
-    let mut valid_counts = vec![0_usize; n_variants];
-
-    for (i, hap) in ht.iter().enumerate() {
-        let mut sum_alleles = 0.0;
-        let mut calls = 0;
-        for &h in hap.iter() {
-            if h != -9 {
-                sum_alleles += h as f32;
-                calls += 1;
-            }
+    // perform sums
+    for i in 0..a.len() {
+        let x = a[i];
+        let y = b[i];
+        if x >= 0 && y >= 0 {
+            n += 1.0f32;
+            m0 += x as f32;
+            m1 += y as f32;
+            v0 += a_sq[i] as f32;
+            v1 += b_sq[i] as f32;
+            cov += (x * y) as f32;
         }
-        p[i] = if calls > 0 {
-            sum_alleles / calls as f32
-        } else {
-            0.0
-        };
-        valid_counts[i] = calls;
+    };
+
+    if n == 0.0 || v0 == 0.0 || v1 == 0.0 {
+        return f32::NAN;
     }
 
-    // Minimum valid sample size across variants
-    let n = *valid_counts.iter().min().unwrap_or(&0);
-    if n == 0 {
-        panic!("No valid haplotype calls found");
-    }
-    let n = n as f32;
+    // Reproduce logic
+    m0 /= n;
+    m1 /= n;
+    v0 /= n;
+    v1 /= n;
+    cov /= n;
+    cov -= m0 * m1;
+    v0 -= m0 * m0;
+    v1 -= m1 * m1;
 
-    // Center haplotypes (subtract p, set missing to 0 so they don’t contribute)
-    let mut centered: Vec<Vec<f32>> = vec![vec![0.0; n_haplotypes]; n_variants];
-    for (i, hap) in ht.iter().enumerate() {
-        for (j, &h) in hap.iter().enumerate() {
-            if h != -9 {
-                centered[i][j] = h as f32 - p[i];
-            } else {
-                // Missing -> contribute 0 to covariance sum
-                centered[i][j] = 0.0;
-            }
-        }
-    }
-
-    // Covariance between first two variants
-    // Rogers-Huff r correlation between each variant
-    let mut rh_r: Vec<Vec<f32>> = vec![vec![0.0; n_variants]; n_variants];
-    for i in 0..(n_variants - 1) {
-        for j in (i + 1)..n_variants {
-            // Variances on diagonal
-            let mut cov = 0.0;
-            let mut var0 = 0.0;
-            let mut var1 = 0.0;
-            for k in 0..n_haplotypes {
-                cov += centered[i][k] * centered[j][k];
-                var0 += centered[i][k].powi(2);
-                var1 += centered[j][k].powi(2);
-            }
-            cov /= n;
-            var0 /= n;
-            var1 /= n;
-
-            if var0 <= 0.0 || var1 <= 0.0 {
-                panic!("Non-positive variance encountered");
-            }
-            let r = cov / (var0.sqrt() * var1.sqrt());
-            rh_r[i][j] = r.powi(2);
-            rh_r[j][i] = r.powi(2);
-        }
-    }
-    Ok(rh_r)
+    // Return r
+    cov / (v0 * v1).sqrt()
 }
 
 // Convert genotypes in the appropriate form
-fn gt2haplotypes(gt_m: Vec<&Vec<Genotype>>) -> Vec<Vec<i32>> {
+fn gt2haplotypes(gt_m: Vec<&Vec<Genotype>>) -> Vec<Vec<i8>> {
     gt_m.iter()
         .map(|gts| {
             gts.iter()
                 .flat_map(|gt| {
                     gt.iter()
                         .map(|a| match a {
-                            GenotypeAllele::PhasedMissing => -9 as i32,
-                            GenotypeAllele::UnphasedMissing => -9 as i32,
-                            _ => a.index().unwrap() as i32,
+                            GenotypeAllele::PhasedMissing => -9 as i8,
+                            GenotypeAllele::UnphasedMissing => -9 as i8,
+                            _ => a.index().unwrap() as i8,
                         })
-                        .collect::<Vec<i32>>()
+                        .collect::<Vec<i8>>()
                 })
-                .collect::<Vec<i32>>()
+                .collect::<Vec<i8>>()
         })
-        .collect::<Vec<Vec<i32>>>()
+        .collect::<Vec<Vec<i8>>>()
 }
 
 // Genotypes to counts
-fn gt2gcounts(gt_m: Vec<&Vec<Genotype>>, ref_all: Vec<u32>) -> Vec<Vec<i32>> {
+fn gt2gcounts(gt_m: Vec<&Vec<Genotype>>, ref_all: Vec<u32>) -> Vec<Vec<i8>> {
     gt_m.iter()
         .zip(ref_all.iter()) // iter over (Vec<Genotype>, &u32 ref allele index)
         .map(|(gts, &ref_ix)| {
@@ -710,7 +629,7 @@ fn gt2gcounts(gt_m: Vec<&Vec<Genotype>>, ref_all: Vec<u32>) -> Vec<Vec<i32>> {
                         -9
                     } else {
                         // Count how many are NOT the ref allele
-                        let alt_count = alleles.iter().filter(|&&ix| ix != ref_ix).count() as i32;
+                        let alt_count = alleles.iter().filter(|&&ix| ix != ref_ix).count() as i8;
 
                         if alt_count == 0 {
                             0
@@ -755,12 +674,7 @@ fn compute_weights(
     };
 
     // Compute the R2
-    let ld = if isphased {
-        rogers_huff_r_ht(&d)
-    } else {
-        rogers_huff_r_gt(&d)
-    }
-    .expect("Cannot compute LD");
+    let ld = gn_pairwise_corrcoef_int8(&d).expect("Cannot compute LD");
 
     // Apply cutoff
     let above_cut = apply_cutoff(&ld, ldcutoff);
@@ -813,15 +727,15 @@ pub fn xpclr(
         .enumerate()
         .map(|(n, (start, stop))| {
             let (ix, n_avail) = get_window(&bpositions, *start, *stop, maxsnps).expect("Cannot find the window");
-            let max_ix = ix.iter().max().unwrap();
-            let bpi = bpositions[ix[0]];
-            let bpe = bpositions[max_ix.to_owned()];
+            let max_ix = ix.iter().max().unwrap_or(&0_usize).to_owned();
             log::debug!("Window ID: {n}; Window BP interval: {start}-{stop}; N SNPs selected: {}; N SNP available: {n_avail}", ix.len());
             if ix.len() < minsnps {
                 let xpclr_vals = (f32::NAN, f32::NAN, f32::NAN);
-                println!("{bpi} {bpe} {xpclr_vals:?}");
-                ((bpi, bpe), xpclr_vals)
+                println!("Window ID: {n}; Window BP interval: {start}-{stop}; N SNPs selected: {}; N SNP available: {n_avail}; {xpclr_vals:?}", ix.len());
+                ((*start as usize, *stop as usize), xpclr_vals)
             } else {
+                let bpi = bpositions[ix[0]];
+                let bpe = bpositions[max_ix.to_owned()];
                 // Do not clone, just refer to them
                 let (gt_range, ar_range, gd_range, a1_range, t1_range, p2freqs): (Vec<&Vec<Genotype>>, Vec<u32>, Vec<f32>, Vec<u64>, Vec<u64>, Vec<f32>) = ix.iter().map(|&i| (&gt2[i], &ar[i], &geneticd[i], &t1[i], &a1[i], &q2[i])).multiunzip();
                 // Compute distances from the average gen. dist.
@@ -840,7 +754,7 @@ pub fn xpclr(
                     &sel_coeffs,
                     Some(0)
                 ).expect("Failed computing XP-CLR for window");
-                println!("{bpi} {bpe} {xpclr_vals:?}");
+                println!("Window ID: {n}; Window BP interval: {start}-{stop} ({bpi}-{bpe}); N SNPs selected: {}; N SNP available: {n_avail}; {xpclr_vals:?}", ix.len());
 
                 ((bpi, bpe), xpclr_vals)
             }
