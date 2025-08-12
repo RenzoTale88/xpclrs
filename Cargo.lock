@@ -2245,6 +2245,7 @@ dependencies = [
  "clap",
  "counter",
  "env_logger",
+ "flate2",
  "itertools 0.14.0",
  "log",
  "niffler",

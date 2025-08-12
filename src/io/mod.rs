@@ -3,6 +3,8 @@ This module provides the I/O functions (e.g. VCF/BCF readers, text readers etc).
 */
 use anyhow::Result;
 use counter::Counter;
+use flate2::write;
+use flate2::Compression;
 use itertools::MultiUnzip;
 use rust_htslib::{
     bcf::{
@@ -11,10 +13,18 @@ use rust_htslib::{
         IndexedReader, Read, Reader,
     },
 };
+use statistical::{mean, standard_deviation};
 use std::{
     collections::HashSet,
+    ffi::OsStr,
     fmt::Display,
-    io::{BufRead, BufReader},
+    fs::File,
+    io::{
+        BufRead,
+        BufReader,
+        BufWriter,
+        Write
+    },
     path::Path,
 };
 
@@ -98,7 +108,7 @@ fn indexed_xcf(
     xcf_fn: String,
     s1: &[String],
     s2: &[String],
-    chrom: String,
+    chrom: &str,
     start: u64,
     end: Option<u64>,
     (rrate, _gdistkey): (Option<f32>, Option<String>),
@@ -183,36 +193,22 @@ fn indexed_xcf(
                 skipped += 1;
                 multiallelic += 1;
                 None
-            } else if alleles1.len() == 0 || alleles2.len() == 0 {
+            } else if alleles1.is_empty() || alleles2.is_empty() {
                 skipped += 1;
-                if alleles1.len() == 0 {
+                if alleles1.is_empty() {
                     miss_gt1 += 1;
                 };
-                if alleles2.len() == 0 {
+                if alleles2.is_empty() {
                     miss_gt2 += 1;
                 };
                 None
+            } else if alleles2.len() == 1 || alleles2.values().min().copied()? == 1 {
+                skipped += 1;
+                monom_gt2 += 1;
+                None
             } else {
-                if alleles2.len() == 1
-                    || alleles2.values().min().copied()? == 1
-                // if alleles1.len() == 1
-                //     || alleles1.values().min().copied()? == 1
-                //     || alleles2.len() == 1
-                //     || alleles2.values().min().copied()? == 1
-                {
-                    skipped += 1;
-                    monom_gt2 += 1;
-                    // if alleles1.len() == 1 || alleles1.values().min().copied()? == 1 {
-                    //     monom_gt1 += 1;
-                    // };
-                    // if alleles2.len() == 1 || alleles2.values().min().copied()? == 1 {
-                    //     monom_gt2 += 1;
-                    // }
-                    None
-                } else {
-                    pass += 1;
-                    Some((record.pos() as usize, gt1, gt2, record.pos() as f32 * rrate))
-                }
+                pass += 1;
+                Some((record.pos() as usize, gt1, gt2, record.pos() as f32 * rrate))
             }
         })
         .multiunzip();
@@ -232,14 +228,13 @@ fn indexed_xcf(
         panic!("Inconsistent counts")
     }
     // Print some info
-    log::info!("Processed {} variants", tot);
-    log::info!("Loaded {} variants", pass);
-    log::info!("Skipped {} variants because:", skipped);
-    log::info!(" - {} multiallelic", multiallelic);
-    // log::info!(" - {} monomorphic in pop A", monom_gt1);
-    log::info!(" - {} monomorphic in pop B", monom_gt2);
-    log::info!(" - {} all-missing in pop A", miss_gt1);
-    log::info!(" - {} all-missing in pop B", miss_gt2);
+    log::info!("Processed {tot} variants");
+    log::info!("Loaded {pass} variants");
+    log::info!("Skipped {skipped} variants because:");
+    log::info!(" - {multiallelic} multiallelic");
+    log::info!(" - {monom_gt2} monomorphic in pop B");
+    log::info!(" - {miss_gt1} all-missing in pop A");
+    log::info!(" - {miss_gt2} all-missing in pop B");
     Ok((positions, gt1_data, gt2_data, gd_data))
 }
 
@@ -248,7 +243,7 @@ fn readthrough_xcf(
     xcf_fn: String,
     s1: &[String],
     s2: &[String],
-    chrom: String,
+    chrom: &str,
     start: u64,
     end: Option<u64>,
     (rrate, _gdistkey): (Option<f32>, Option<String>),
@@ -340,36 +335,22 @@ fn readthrough_xcf(
                 skipped += 1;
                 multiallelic += 1;
                 None
-            } else if alleles1.len() == 0 || alleles2.len() == 0 {
+            } else if alleles1.is_empty() || alleles2.is_empty() {
                 skipped += 1;
-                if alleles1.len() == 0 {
+                if alleles1.is_empty() {
                     miss_gt1 += 1;
                 };
-                if alleles2.len() == 0 {
+                if alleles2.is_empty() {
                     miss_gt2 += 1;
                 };
                 None
+            } else if alleles2.len() == 1 || alleles2.values().min().copied()? == 1 {
+                skipped += 1;
+                monom_gt2 += 1;
+                None
             } else {
-                // if alleles1.len() == 1
-                //     || alleles1.values().min().copied()? == 1
-                //     || alleles2.len() == 1
-                //     || alleles2.values().min().copied()? == 1
-                if alleles2.len() == 1
-                    || alleles2.values().min().copied()? == 1
-                {
-                    skipped += 1;
-                    monom_gt2 += 1;
-                    // if alleles1.len() == 1 || alleles1.values().min().copied()? == 1 {
-                    //     monom_gt1 += 1;
-                    // };
-                    // if alleles2.len() == 1 || alleles2.values().min().copied()? == 1 {
-                    //     monom_gt2 += 1;
-                    // }
-                    None
-                } else {
-                    pass += 1;
-                    Some((record.pos() as usize, gt1, gt2, record.pos() as f32 * rrate))
-                }
+                pass += 1;
+                Some((record.pos() as usize, gt1, gt2, record.pos() as f32 * rrate))
             }
         })
         .multiunzip();
@@ -389,14 +370,14 @@ fn readthrough_xcf(
         panic!("Inconsistent counts")
     }
     // Print some info
-    log::info!("Processed {} variants", tot);
-    log::info!("Loaded {} variants", pass);
-    log::info!("Skipped {} variants because:", skipped);
-    log::info!(" - {} multiallelic", multiallelic);
-    // log::info!(" - {} monomorphic in pop A", monom_gt1);
-    log::info!(" - {} monomorphic in pop B", monom_gt2);
-    log::info!(" - {} all-missing in pop A", miss_gt1);
-    log::info!(" - {} all-missing in pop B", miss_gt2);
+
+    log::info!("Processed {tot} variants");
+    log::info!("Loaded {pass} variants");
+    log::info!("Skipped {skipped} variants because:");
+    log::info!(" - {multiallelic} multiallelic");
+    log::info!(" - {monom_gt2} monomorphic in pop B");
+    log::info!(" - {miss_gt1} all-missing in pop A");
+    log::info!(" - {miss_gt2} all-missing in pop B");
     Ok((positions, gt1_data, gt2_data, gd_data))
 }
 
@@ -405,7 +386,7 @@ pub fn process_xcf(
     xcf_fn: String,
     s1: &[String],
     s2: &[String],
-    chrom: String,
+    chrom: &str,
     start: Option<u64>,
     end: Option<u64>,
     (rrate, _gdistkey): (Option<f32>, Option<String>),
@@ -423,3 +404,76 @@ pub fn process_xcf(
     .expect("Failed to parse the VCF/BCF file");
     Ok((positions, gt1_data, gt2_data, gd_data))
 }
+
+fn write_table(filename: &str) -> Box<dyn Write> {
+    let path = Path::new(filename);
+    let file = File::create(path)
+        .unwrap_or_else(|why| panic!("couldn't open {}: {}", path.display(), why));
+
+    let writer: Box<dyn Write> = if path.extension() == Some(OsStr::new("gz")) {
+        // Create a GzEncoder which compresses data and writes it to the file
+        let gz_encoder = write::GzEncoder::new(file, Compression::default());
+        // Wrap the GzEncoder in a BufWriter for efficient buffering
+        Box::new(BufWriter::with_capacity(128 * 1024, gz_encoder))
+    } else {
+        // Wrap the file in a BufWriter directly for uncompressed writing
+        Box::new(BufWriter::with_capacity(128 * 1024, file))
+    };
+
+    // Create the fastq::Writer using the boxed writer
+    writer
+}
+
+// The following results
+// n, (start, stop, bpi, bpe, nsnps, avail), (model_li, null_li, selectionc)
+// Map to:
+// win index, (start and stop of window), (bpi and bpe are edges),  
+pub fn to_table(
+    chrom: &str,
+    xpclr_res: Vec<(usize, (usize, usize, usize, usize, usize, usize), (f32, f32, f32, f32))>,
+    filename: &str
+) -> Result<()> {
+
+    // Prepare output file
+    let mut xpclr_tsv = write_table(filename);
+
+    // Write header
+    writeln!(xpclr_tsv, "chrom,start,stop,pos_start,pos_stop,modelL,nullL,sel_coef,nSNPs,nSNPs_avail,xpclr,xpclr_norm")?;
+
+    // Compute normalizing factors
+    let xpclr_values = xpclr_res.iter().map(|&v| v.2.3).collect::<Vec<f32>>();
+    let mean_xpclr = mean( &xpclr_values );
+    let std_xpclr = standard_deviation( &xpclr_values, None );
+
+    for (_n, (start, stop, bpi, bpe, nsnps, avail), (model_li, null_li, selectionc, xpclr)) in xpclr_res {
+        let xpclr_normalized = (xpclr - mean_xpclr) / std_xpclr;
+        writeln!(xpclr_tsv, "{chrom},{start},{stop},{bpi},{bpe},{model_li},{null_li},{selectionc},{nsnps},{avail},{xpclr},{xpclr_normalized}")?;
+    }
+
+    Ok(())
+}
+
+// def tabulate_results(chrom, model_li, null_li, selectionc,
+//                      counts, count_avail, windows, edges):
+
+//     lidf = pd.DataFrame(np.vstack((model_li, null_li, selectionc, counts, count_avail)).T,
+//                         columns=["modelL", "nullL", "sel_coef", "nSNPs", "nSNPs_avail"])
+
+//     # these are the nominal windows
+//     winf = pd.DataFrame(windows, columns=["start", "stop"])
+
+//     # these are the "real" windows. Gives a guide to how close we are.
+//     realf = pd.DataFrame(edges, columns=["pos_start", "pos_stop"])
+
+//     out = pd.concat([winf, realf, lidf], axis=1)
+
+//     out["xpclr"] = 2 * (out.modelL - out.nullL)
+//     out["xpclr_norm"] = (out.xpclr - np.nanmean(out.xpclr))/np.nanstd(out.xpclr)
+
+//     out.insert(0, "chrom", np.repeat(chrom, len(out)))
+
+//     string_id = ["{0}_{1:08d}_{2:08d}".format(r.chrom, r.start, r.stop)
+//                  for i, r in out.iterrows()]
+//     out.insert(0, "id", string_id)
+
+//     return out

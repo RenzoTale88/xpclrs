@@ -1,7 +1,7 @@
 use clap::{value_parser, Arg, Command};
 use env_logger::{self, Env};
 use xpclrs::{
-    io::{process_xcf, read_file},
+    io::{process_xcf, read_file, to_table},
     methods::xpclr,
 };
 
@@ -146,14 +146,14 @@ fn main() {
         .get_one::<String>("CHROM")
         .expect("Invalid chromosome code")
         .to_owned();
-    let start = matches.get_one::<u64>("START").map(|&x| x);
-    let step = matches.get_one::<u64>("STEP").map(|&x| x).unwrap();
-    let end = matches.get_one::<u64>("STOP").map(|&x| x);
-    let minsnps = matches.get_one::<u64>("MINSNPS").map(|&x| x).unwrap();
-    let maxsnps = matches.get_one::<u64>("MAXSNPS").map(|&x| x).unwrap();
-    let ldcutoff = matches.get_one::<f32>("LDCUTOFF").map(|&x| x);
-    let rrate = matches.get_one::<f32>("RECRATE").map(|&x| x);
-    let phased = matches.get_one::<bool>("PHASED").map(|&x| x);
+    let start = matches.get_one::<u64>("START").copied();
+    let step = matches.get_one::<u64>("STEP").copied().unwrap();
+    let end = matches.get_one::<u64>("STOP").copied();
+    let minsnps = matches.get_one::<u64>("MINSNPS").copied().unwrap();
+    let maxsnps = matches.get_one::<u64>("MAXSNPS").copied().unwrap();
+    let ldcutoff = matches.get_one::<f32>("LDCUTOFF").copied();
+    let rrate = matches.get_one::<f32>("RECRATE").copied();
+    let phased = matches.get_one::<bool>("PHASED").copied();
 
     // Get the VCF
     let xcf_path = matches
@@ -162,7 +162,7 @@ fn main() {
         .to_owned();
 
     // Get the output path
-    let _out_path = matches
+    let out_path = matches
         .get_one::<String>("OUT")
         .expect("Output file is required");
     let n_threads = matches
@@ -192,7 +192,7 @@ fn main() {
         xcf_path,
         &samples_a,
         &samples_b,
-        chrom,
+        &chrom,
         start,
         end,
         (rrate, None),
@@ -216,16 +216,18 @@ fn main() {
         .unwrap();
 
     // Demo
-    let p1: Vec<f32> = vec![0.001, 0.0002, 0.01, 0.4, 0.9];
     pool.install(|| {
-        let _ = xpclr(
+        let xpclr_res = xpclr(
             (gt1, gt2),
             (positions, gdistances, windows),
             (ldcutoff, phased),
             (maxsnps as usize, minsnps as usize),
-        );
-        // Code here runs using at most num_threads threads
-        // For example, a parallel iterator:
-        log::info!(target: "xpclr", "Harding likelihood: {p1:?}");
+        ).expect("Failed running the XP-CLR function");
+        // Write output
+        log::info!("Writing output file to {out_path}...");
+        let _ = to_table(&chrom, xpclr_res, out_path);
     });
+
+
+    log::info!("XPCLR computation completed.")
 }

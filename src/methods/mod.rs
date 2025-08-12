@@ -523,7 +523,7 @@ fn gt_to_af(gt_m: &[Vec<Genotype>]) -> Result<(Vec<u32>, Vec<u64>, Vec<u64>, Vec
 // Attempt to compute the LD using the same method as scikit-allele 
 // [here](https://github.com/cggh/scikit-allel/blob/master/allel/opt/stats.pyx#L90)
 // and [here]()
-fn gn_pairwise_corrcoef_int8(gn: &Vec<Vec<i8>>) -> Result<Vec<Vec<f32>>> {
+fn gn_pairwise_corrcoef_int8(gn: &[Vec<i8>]) -> Result<Vec<Vec<f32>>> {
     let n = gn.len();
     // Precompute gn_sq[i][k] = gn[i][k]^2
     let gn_sq: Vec<Vec<i8>> = gn
@@ -552,7 +552,7 @@ fn gn_pairwise_corrcoef_int8(gn: &Vec<Vec<i8>>) -> Result<Vec<Vec<f32>>> {
 }
 
 // Example reimplementation of gn_corrcoef_int8 in Rust
-fn gn_corrcoef_int8(a: &Vec<i8>, b: &Vec<i8>, a_sq: &Vec<i8>, b_sq: &Vec<i8>) -> f32 {
+fn gn_corrcoef_int8(a: &[i8], b: &[i8], a_sq: &[i8], b_sq: &[i8]) -> f32 {
     // Convert to f32 and compute Pearson correlation
     let mut m0: f32 = 0.0;
     let mut m1: f32 = 0.0;
@@ -601,8 +601,8 @@ fn gt2haplotypes(gt_m: Vec<&Vec<Genotype>>) -> Vec<Vec<i8>> {
                 .flat_map(|gt| {
                     gt.iter()
                         .map(|a| match a {
-                            GenotypeAllele::PhasedMissing => -9 as i8,
-                            GenotypeAllele::UnphasedMissing => -9 as i8,
+                            GenotypeAllele::PhasedMissing => -9_i8,
+                            GenotypeAllele::UnphasedMissing => -9_i8,
                             _ => a.index().unwrap() as i8,
                         })
                         .collect::<Vec<i8>>()
@@ -627,7 +627,7 @@ fn gt2gcounts(gt_m: Vec<&Vec<Genotype>>, ref_all: Vec<u32>) -> Vec<Vec<i8>> {
 
                     if alleles.is_empty() {
                         // All missing
-                        -9
+                        -9_i8
                     } else {
                         // Count how many are NOT the ref allele
                         let alt_count = alleles.iter().filter(|&&ix| ix != ref_ix).count() as i8;
@@ -645,7 +645,7 @@ fn gt2gcounts(gt_m: Vec<&Vec<Genotype>>, ref_all: Vec<u32>) -> Vec<Vec<i8>> {
 }
 
 // LD cutoff
-fn apply_cutoff(matrix: &Vec<Vec<f32>>, cutoff: f32) -> Vec<Vec<bool>> {
+fn apply_cutoff(matrix: &[Vec<f32>], cutoff: f32) -> Vec<Vec<bool>> {
     matrix
         .iter()
         .map(|row| {
@@ -685,7 +685,7 @@ fn compute_weights(
         .iter()
         .map(|v| {
             let summa: f32 = v
-                .into_iter()
+                .iter()
                 .map(|b| match b {
                     true => 1_f32,
                     false => 0_f32,
@@ -703,7 +703,7 @@ pub fn xpclr(
     (bpositions, geneticd, windows): (Vec<usize>, Vec<f32>, Vec<(usize, usize)>), // Positions
     (ldcutoff, phased): (Option<f32>, Option<bool>), // LD-related
     (maxsnps, minsnps): (usize, usize),                   // Size/count filters
-) -> Result<Vec<(usize, (usize, usize, usize, usize), (f32, f32, f32))>> {
+) -> Result<Vec<(usize, (usize, usize, usize, usize, usize, usize), (f32, f32, f32, f32))>> {
     let sel_coeffs = vec![
         0.0, 0.00001, 0.00005, 0.0001, 0.0002, 0.0004, 0.0006, 0.0008, 0.001, 0.003, 0.005, 0.01,
         0.05, 0.08, 0.1, 0.15,
@@ -722,7 +722,7 @@ pub fn xpclr(
     log::info!("Omega: {w}");
 
     // Process each window
-    let results: Vec<(usize, (usize, usize, usize, usize), (f32, f32, f32))> = windows
+    let mut results: Vec<(usize, (usize, usize, usize, usize, usize, usize), (f32, f32, f32, f32))> = windows
         // Parallellize by window
         .par_iter()
         .enumerate()
@@ -730,11 +730,10 @@ pub fn xpclr(
             let (ix, n_avail) = get_window(&bpositions, *start, *stop, maxsnps).expect("Cannot find the window");
             let n_snps = ix.len();
             let max_ix = ix.iter().last().unwrap_or(&0_usize).to_owned();
-            log::debug!("Window idx: {n}; Window BP interval: {start}-{stop}; N SNPs selected: {}; N SNP available: {n_avail}", n_snps);
-            println!("Window BP interval: {start}-{stop}; N SNPs selected: {}; N SNP available: {n_avail}", n_snps);
+            log::debug!("Window idx: {n}; Window BP interval: {start}-{stop}; N SNPs selected: {n_snps}; N SNP available: {n_avail}");
             if n_snps < minsnps {
-                let xpclr_vals = (f32::NAN, f32::NAN, f32::NAN);
-                (n, (*start as usize, *stop as usize, n_snps, n_avail), xpclr_vals)
+                let xpclr_vals = (f32::NAN, f32::NAN, f32::NAN, f32::NAN);
+                (n, (*start, *stop, *start, *stop, n_snps, n_avail), xpclr_vals)
             } else {
                 let bpi = bpositions[ix[0]];
                 let bpe = bpositions[max_ix];
@@ -747,7 +746,7 @@ pub fn xpclr(
                 let weights = compute_weights(gt_range, ar_range, ldcutoff, isphased).expect("Failed to compute the weights");
                 let omegas = vec![w; rds.len()];
                 // Compute XP-CLR
-                let xpclr_vals = compute_xpclr(
+                let xpclr_res = compute_xpclr(
                     (&a1_range, &t1_range),
                     &rds,
                     &p2freqs,
@@ -756,15 +755,13 @@ pub fn xpclr(
                     &sel_coeffs,
                     Some(0)
                 ).expect("Failed computing XP-CLR for window");
-                (n, (bpi, bpe, n_snps, n_avail), xpclr_vals)
+                let xpclr_v = 2.0_f32 * (xpclr_res.0 - xpclr_res.1);
+                (n, (*start, *stop, bpi, bpe, n_snps, n_avail), (xpclr_res.0, xpclr_res.1, xpclr_res.2, xpclr_v))
             }
         })
         .collect();
+
+    results.sort_by_key(|item| item.0);
     Ok(results)
 }
 
-/*
-
-    # modelL, nullL, selcoef, n snps, actual window edges.
-    return li_data.T[0], li_data.T[1], li_data.T[2], nsnp, nsnp_avail, ixspan
-*/
