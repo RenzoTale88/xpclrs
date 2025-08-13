@@ -223,7 +223,6 @@ fn indexed_xcf(
     if positions.len() as i32 != pass {
         panic!("Inconsistent data")
     };
-    println!("{tot} = {pass} {skipped}");
     if tot != (pass + skipped) {
         panic!("Inconsistent counts")
     }
@@ -365,7 +364,6 @@ fn readthrough_xcf(
     if positions.len() as i32 != pass {
         panic!("Inconsistent data")
     };
-    println!("{tot} = {pass} {skipped}");
     if tot != (pass + skipped) {
         panic!("Inconsistent counts")
     }
@@ -405,7 +403,7 @@ pub fn process_xcf(
     Ok((positions, gt1_data, gt2_data, gd_data))
 }
 
-fn write_table(filename: &str) -> Box<dyn Write> {
+pub fn write_table(filename: &str) -> Box<dyn Write> {
     let path = Path::new(filename);
     let file = File::create(path)
         .unwrap_or_else(|why| panic!("couldn't open {}: {}", path.display(), why));
@@ -431,19 +429,23 @@ fn write_table(filename: &str) -> Box<dyn Write> {
 pub fn to_table(
     chrom: &str,
     xpclr_res: Vec<(usize, (usize, usize, usize, usize, usize, usize), (f32, f32, f32, f32))>,
-    filename: &str
+    xpclr_tsv: &mut Box<dyn std::io::Write>
 ) -> Result<()> {
-
-    // Prepare output file
-    let mut xpclr_tsv = write_table(filename);
-
     // Write header
     writeln!(xpclr_tsv, "chrom,start,stop,pos_start,pos_stop,modelL,nullL,sel_coef,nSNPs,nSNPs_avail,xpclr,xpclr_norm")?;
 
     // Compute normalizing factors
-    let xpclr_values = xpclr_res.iter().map(|&v| v.2.3).collect::<Vec<f32>>();
+    let xpclr_values = xpclr_res
+        .iter()
+        .filter_map(|&v| if v.2.3.is_nan() {
+            None
+        } else {
+            Some(v.2.3)
+        })
+        .collect::<Vec<f32>>();
     let mean_xpclr = mean( &xpclr_values );
     let std_xpclr = standard_deviation( &xpclr_values, None );
+    log::info!("XP-CLR mean +/- st.d: {mean_xpclr} (+/-{std_xpclr})");
 
     for (_n, (start, stop, bpi, bpe, nsnps, avail), (model_li, null_li, selectionc, xpclr)) in xpclr_res {
         let xpclr_normalized = (xpclr - mean_xpclr) / std_xpclr;
@@ -452,28 +454,3 @@ pub fn to_table(
 
     Ok(())
 }
-
-// def tabulate_results(chrom, model_li, null_li, selectionc,
-//                      counts, count_avail, windows, edges):
-
-//     lidf = pd.DataFrame(np.vstack((model_li, null_li, selectionc, counts, count_avail)).T,
-//                         columns=["modelL", "nullL", "sel_coef", "nSNPs", "nSNPs_avail"])
-
-//     # these are the nominal windows
-//     winf = pd.DataFrame(windows, columns=["start", "stop"])
-
-//     # these are the "real" windows. Gives a guide to how close we are.
-//     realf = pd.DataFrame(edges, columns=["pos_start", "pos_stop"])
-
-//     out = pd.concat([winf, realf, lidf], axis=1)
-
-//     out["xpclr"] = 2 * (out.modelL - out.nullL)
-//     out["xpclr_norm"] = (out.xpclr - np.nanmean(out.xpclr))/np.nanstd(out.xpclr)
-
-//     out.insert(0, "chrom", np.repeat(chrom, len(out)))
-
-//     string_id = ["{0}_{1:08d}_{2:08d}".format(r.chrom, r.start, r.stop)
-//                  for i, r in out.iterrows()]
-//     out.insert(0, "id", string_id)
-
-//     return out

@@ -1,7 +1,7 @@
 use clap::{value_parser, Arg, Command};
 use env_logger::{self, Env};
 use xpclrs::{
-    io::{process_xcf, read_file, to_table},
+    io::{process_xcf, read_file, write_table, to_table},
     methods::xpclr,
 };
 
@@ -215,7 +215,8 @@ fn main() {
         .build()
         .unwrap();
 
-    // Demo
+    // Prepare output file
+    // Run XP-CLR
     pool.install(|| {
         let xpclr_res = xpclr(
             (gt1, gt2),
@@ -225,7 +226,8 @@ fn main() {
         ).expect("Failed running the XP-CLR function");
         // Write output
         log::info!("Writing output file to {out_path}...");
-        let _ = to_table(&chrom, xpclr_res, out_path);
+        let mut xpclr_tsv = write_table(&format!("{out_path}.{}", &chrom));
+        let _ = to_table(&chrom, xpclr_res, &mut xpclr_tsv);
     });
 
 

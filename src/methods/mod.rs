@@ -3,7 +3,7 @@ This module provides the functions required to compute the XP-CLR.
 */
 use anyhow::Result;
 use counter::Counter;
-use itertools::MultiUnzip;
+use itertools::Itertools;
 use quad_rs::{EvaluationError, Integrable, Integrator};
 use rand::prelude::IndexedRandom;
 use rayon::prelude::*;
@@ -101,8 +101,14 @@ pub fn est_omega(q1: &[f32], q2: &[f32]) -> Result<f32> {
     let w = mean(
         &q1.iter()
             .zip(q2)
-            .map(|(p, q)| ((p - q) * (p - q)) / (q * (1f32 - q)))
-            .collect::<Vec<f32>>(),
+            .enumerate()
+            .map(|(n, (p, q))| {
+                if n < 25 {
+                    println!("{p} {q} {} {} {}", ((p - q) * (p - q)), (q * (1f32 - q)), ((p - q) * (p - q)) / (q * (1f32 - q)) );
+                }
+                ((p - q) * (p - q)) / (q * (1f32 - q))
+            })
+            .collect::<Vec<f32>>()
     );
     Ok(w)
 }
@@ -218,8 +224,6 @@ pub fn pden_binomial(p1_val: f32, xj: u64, nj: u64, c: f32, p2: f32, var: f32) -
     let density = a_term * b_term * (-c_term).exp();
 
     // Apply binomial pmf weight
-    // Use statrs crate Binomial for pmf
-    use statrs::distribution::Binomial;
     let binom = Binomial::new(p1_val as f64, nj).expect("Cannot compute binomial");
     let pmf_val = binom.pmf(xj) as f32;
 
@@ -322,7 +326,6 @@ impl Integrable for PdensityBinom {
 
         // Apply binomial pmf weight
         // Use statrs crate Binomial for pmf
-        use statrs::distribution::Binomial;
         let binom = Binomial::new(p1_val as f64, nj).expect("Cannot compute binomial");
         let pmf_val = binom.pmf(xj) as f32;
 
@@ -334,32 +337,34 @@ impl Integrable for PdensityBinom {
 
 fn compute_chen_likelihood(xj: u64, nj: u64, c: f32, p2: f32, var: f32) -> Result<f32> {
     // Default integrator
-    let integrator = Integrator::default().relative_tolerance(0.001);
+    let integrator_pdf = Integrator::default().relative_tolerance(0.001);
+    let integrator_bin = Integrator::default().relative_tolerance(0.001);
 
     // Prepare integrands
     let integrand_pdf = Pdensity { c, p2, var };
     let integrand_bin = PdensityBinom { c, p2, var, xj, nj };
 
     // Integration range on p1 values, for example [0.0, 1.0]
-    let like_b = integrator
+    let like_b = integrator_pdf
         .integrate(integrand_pdf, 0.001f32..0.999)
         .expect("Invalid integral")
         .result
         .result
         .expect("Not a valid number");
-    let like_i = integrator
+    let like_i = integrator_bin
         .integrate(integrand_bin, 0.001f32..0.999)
         .expect("Invalid integral")
         .result
         .result
         .expect("Not a valid number");
-
+    
     // Return the right value
-    let ratio = match (like_i, like_b) {
-        (0.0, _) => -1800f32,
-        (_, 0.0) => -1800f32,
-        (_, _) => like_i.ln() - like_b.ln(),
+    let ratio = if like_i > 0.0 && like_b > 0.0 {
+        (like_i.ln()) - (like_b.ln())
+    } else {
+        -1800_f32
     };
+    log::debug!("xj: {xj} nj: {nj} c: {c} p1: {p2} var: {var} like_b: {like_b} like_i: {like_i} ratio: {ratio}");
     Ok(ratio)
 }
 
@@ -414,12 +419,12 @@ fn compute_complikelihood(
                 let c = compute_c(*r, sc, None, None, None).expect("Cannot compute C");
                 // Compute likelihood
                 let cl = match method {
-                    0 => compute_chen_likelihood(*xj, *nj, c, *p2, var),
                     1 => compute_romberg_likelihood(*xj, *nj, c, *p2, var),
                     _ => compute_chen_likelihood(*xj, *nj, c, *p2, var),
                 }
                 .expect("Cannot compute the likelihood");
                 // Return the weighted margin
+                log::debug!("w: {omega} p2: {p2} r: {r} sc: {sc} var: {var} xj: {xj}, nj: {nj} c: {c} cl: {cl} weight: {weight} c*weight: {}", cl * *weight);
                 cl * *weight
             })
             .collect::<Vec<f32>>();
@@ -492,32 +497,48 @@ fn get_window(
 }
 
 // Compute A1/A2 counts and A2 frequency
-fn gt_to_af(gt_m: &[Vec<Genotype>]) -> Result<(Vec<u32>, Vec<u64>, Vec<u64>, Vec<f32>)> {
-    let vals: Vec<(u32, u64, u64, f32)> = gt_m
+fn pair_gt_to_af(gt1_m: &[Vec<Genotype>], gt2_m: &[Vec<Genotype>]) -> Result<(Vec<u32>, Vec<u64>, Vec<u64>, Vec<f32>, Vec<u64>, Vec<u64>, Vec<f32>)> {
+    let vals: Vec<(u32, u64, u64, f32, u64, u64, f32)> = gt1_m
         .iter()
-        .map(|gts| {
-            let counts = gts
+        .zip(gt2_m)
+        .map(|(gts1, gts2)| {
+            let counts1 = gts1
                 .iter()
                 .flat_map(|gt| gt.iter().filter_map(|a| a.index()))
                 .collect::<Counter<u32>>();
-            let tot_counts: usize = counts.values().sum();
-            let ref_allele = counts
+            let counts2 = gts2
+                .iter()
+                .flat_map(|gt| gt.iter().filter_map(|a| a.index()))
+                .collect::<Counter<u32>>();
+            let mut all_alleles: Counter<_> = counts1.clone();
+            all_alleles.extend(&counts2);
+
+            let ref_allele = all_alleles
                 .keys()
                 .min()
-                .expect("Can't compute the minor allele count");
-            let ref_counts = counts
+                .expect("Can't compute the alt allele count");
+            let tot_counts1: usize = counts1.values().sum();
+            let tot_counts2: usize = counts2.values().sum();
+            let ref_counts1 = counts1
                 .get(ref_allele)
-                .expect("Cannot compute ref allele frequency");
-            let alt_counts = (tot_counts - ref_counts) as f32;
+                .unwrap_or(&0);
+            let ref_counts2 = counts2
+                .get(ref_allele)
+                .unwrap_or(&0);
+            let alt_counts1 = (tot_counts1 - ref_counts1) as f32;
+            let alt_counts2 = (tot_counts2 - ref_counts2) as f32;
             (
                 *ref_allele,
-                tot_counts as u64,
-                alt_counts as u64,
-                alt_counts / (tot_counts as f32),
+                tot_counts1 as u64,
+                alt_counts1 as u64,
+                alt_counts1 / (tot_counts1 as f32),
+                tot_counts2 as u64,
+                alt_counts2 as u64,
+                alt_counts2 / (tot_counts2 as f32),
             )
         })
         .collect();
-    Ok(vals.into_iter().multiunzip())
+    Ok(Itertools::multiunzip(vals.into_iter()))
 }
 
 // Attempt to compute the LD using the same method as scikit-allele 
@@ -712,11 +733,8 @@ pub fn xpclr(
     let isphased = phased.unwrap_or(false);
 
     // Get the allele frequencies first
-    let (ar, t1, a1, q1) = gt_to_af(&gt1).expect("Failed to copmute the AF for pop 1");
-    let (_, _t2, _a2, q2) = gt_to_af(&gt2).expect("Failed to copmute the AF for pop 1");
-
-    // Compute genetic distances
-
+    let (ar, t1, a1, q1, _t2, _a2, q2) = pair_gt_to_af(&gt1, &gt2).expect("Failed to copmute the AF for pop 1");
+    
     // Then, let's compute the omega
     let w = est_omega(&q1, &q2).expect("Cannot compute omega");
     log::info!("Omega: {w}");
@@ -738,7 +756,7 @@ pub fn xpclr(
                 let bpi = bpositions[ix[0]];
                 let bpe = bpositions[max_ix];
                 // Do not clone, just refer to them
-                let (gt_range, ar_range, gd_range, a1_range, t1_range, p2freqs): (Vec<&Vec<Genotype>>, Vec<u32>, Vec<f32>, Vec<u64>, Vec<u64>, Vec<f32>) = ix.iter().map(|&i| (&gt2[i], &ar[i], &geneticd[i], &t1[i], &a1[i], &q2[i])).multiunzip();
+                let (gt_range, ar_range, gd_range, a1_range, t1_range, p2freqs): (Vec<&Vec<Genotype>>, Vec<u32>, Vec<f32>, Vec<u64>, Vec<u64>, Vec<f32>) = Itertools::multiunzip(ix.iter().map(|&i| (&gt2[i], &ar[i], &geneticd[i], &a1[i], &t1[i], &q2[i])));
                 // Compute distances from the average gen. dist.
                 let mdist = mean(&gd_range);
                 let rds = gd_range.iter().map(|d| d - mdist ).collect::<Vec<f32>>();
@@ -753,14 +771,13 @@ pub fn xpclr(
                     &weights,
                     &omegas,
                     &sel_coeffs,
-                    Some(0)
+                    None
                 ).expect("Failed computing XP-CLR for window");
                 let xpclr_v = 2.0_f32 * (xpclr_res.0 - xpclr_res.1);
                 (n, (*start, *stop, bpi, bpe, n_snps, n_avail), (xpclr_res.0, xpclr_res.1, xpclr_res.2, xpclr_v))
             }
         })
         .collect();
-
     results.sort_by_key(|item| item.0);
     Ok(results)
 }
