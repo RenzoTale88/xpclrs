@@ -101,11 +101,7 @@ pub fn est_omega(q1: &[f32], q2: &[f32]) -> Result<f32> {
     let w = mean(
         &q1.iter()
             .zip(q2)
-            .enumerate()
-            .map(|(n, (p, q))| {
-                if n < 25 {
-                    println!("{p} {q} {} {} {}", ((p - q) * (p - q)), (q * (1f32 - q)), ((p - q) * (p - q)) / (q * (1f32 - q)) );
-                }
+            .map(|(p, q)| {
                 ((p - q) * (p - q)) / (q * (1f32 - q))
             })
             .collect::<Vec<f32>>()
