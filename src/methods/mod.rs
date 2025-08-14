@@ -385,7 +385,7 @@ fn compute_complikelihood(
                 // }
                 // .expect("Cannot compute the likelihood");
                 // Return the weighted margin
-                println!("w: {omega} p2: {p2} r: {r} sc: {sc} var: {var} xj: {xj}, nj: {nj} c: {c} cl: {cl} weight: {weight} c*weight: {}", cl * *weight);
+                log::debug!("w: {omega} p2: {p2} r: {r} sc: {sc} var: {var} xj: {xj}, nj: {nj} c: {c} cl: {cl} weight: {weight} c*weight: {}", cl * *weight);
                 cl * *weight
             })
             .collect::<Vec<f64>>();
