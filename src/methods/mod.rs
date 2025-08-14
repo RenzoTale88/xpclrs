@@ -4,14 +4,14 @@ This module provides the functions required to compute the XP-CLR.
 use anyhow::Result;
 use counter::Counter;
 use itertools::Itertools;
-use quad_rs::{EvaluationError, Integrable, Integrator};
 use rand::prelude::IndexedRandom;
 use rayon::prelude::*;
+use rgsl::IntegrationWorkspace;
 use rust_htslib::bcf::record::{Genotype, GenotypeAllele};
-use scirs2_integrate::romberg::{romberg, RombergOptions};
 use statistical::mean;
 use statrs::distribution::{Binomial, Discrete};
-use std::f32::{consts::PI};
+use std::f64::consts::PI;
+
 
 // Drafted bisect left and right
 pub struct Bisector<'a, T> {
@@ -92,7 +92,7 @@ impl<'a, T: PartialOrd> PartialBisector<'a, T> {
 }
 
 // Compute the omega
-pub fn est_omega(q1: &[f32], q2: &[f32]) -> Result<f32> {
+pub fn est_omega(q1: &[f64], q2: &[f64]) -> Result<f64> {
     if q2.contains(&0.0) || q2.contains(&1.0) {
         eprintln!("No SNPs in p2 can be fixed.");
         std::process::exit(1);
@@ -102,30 +102,30 @@ pub fn est_omega(q1: &[f32], q2: &[f32]) -> Result<f32> {
         &q1.iter()
             .zip(q2)
             .map(|(p, q)| {
-                ((p - q) * (p - q)) / (q * (1f32 - q))
+                ((p - q) * (p - q)) / (q * (1f64 - q))
             })
-            .collect::<Vec<f32>>()
+            .collect::<Vec<f64>>()
     );
     Ok(w)
 }
 
 // Measure variability for each SNP
-pub fn var_estimate(w: f32, q2: f32) -> Result<f32> {
-    Ok(w * (q2 * (1f32 - q2)))
+pub fn var_estimate(w: f64, q2: f64) -> Result<f64> {
+    Ok(w * (q2 * (1f64 - q2)))
 }
 
 // c is a proxy for selection strength.
 // c is [0,1] the closer to 1, the weaker the influence of selection.
 pub fn compute_c(
-    r: f32,
-    s: f32,
+    r: f64,
+    s: f64,
     ne: Option<u64>,
-    minrd: Option<f32>,
+    minrd: Option<f64>,
     sf: Option<u64>,
-) -> Result<f32> {
-    let ne = ne.unwrap_or(20000) as f32;
+) -> Result<f64> {
+    let ne = ne.unwrap_or(20000) as f64;
     let minrd = minrd.unwrap_or(1e-7);
-    let _sf = sf.unwrap_or(5) as f32;
+    let _sf = sf.unwrap_or(5) as f64;
     if s <= 0.0 {
         Ok(1.0)
     } else {
@@ -134,28 +134,127 @@ pub fn compute_c(
     }
 }
 
+/// Compute pdf(p1 | c, p2, var) matching the Python logic for scalar p1.
+fn pdf_scalar(p1: f64, c: f64, p2: f64, var: f64) -> f64 {
+    let a_term = ( (2.0 * PI * var).sqrt() ).recip();
+
+    let mut r = 0.0;
+
+    // Left side: p1 < c
+    if p1 < c {
+        let b_term_l = (c - p1) / (c * c);
+        let c_term_l = (p1 - c * p2).powi(2) / (2.0 * c * c * var);
+        r += a_term * b_term_l * (-c_term_l).exp();
+    }
+
+    // Right side: p1 > 1 - c
+    if p1 > 1.0 - c {
+        let b_term_r = (p1 + c - 1.0) / (c * c);
+        let c_term_r = (p1 + c - 1.0 - c * p2).powi(2) / (2.0 * c * c * var);
+        r += a_term * b_term_r * (-c_term_r).exp();
+    }
+
+    r
+}
+
+/// Stable binomial pmf: pmf(x | n, p) with 0<=x<=n
+fn binom_pmf(x: u64, n: u64, p: f64) -> f64 {
+    use statrs::function::gamma::ln_gamma;
+
+    if p <= 0.0 {
+        return if x == 0 { 1.0 } else { 0.0 };
+    }
+    if p >= 1.0 {
+        return if x == n { 1.0 } else { 0.0 };
+    }
+
+    let x = x as f64;
+    let n = n as f64;
+
+    // log C(n, x) via log-gamma
+    let ln_choose = ln_gamma(n + 1.0) - ln_gamma(x + 1.0) - ln_gamma(n - x + 1.0);
+    let ln_pmf = ln_choose + x * p.ln() + (n - x) * (1.0 - p).ln();
+    ln_pmf.exp()
+}
+
+/// pdf_integral(p1) = pdf(p1) * BinomPMF(xj | nj, p1)
+fn pdf_integral_scalar(p1: f64, xj: u64, nj: u64, c: f64, p2: f64, var: f64) -> f64 {
+    let dens = pdf_scalar(p1, c, p2, var);
+    let pmf = binom_pmf(xj, nj, p1);
+    dens * pmf
+}
+
+/// Numerically integrate f over [a, b] using GSL QAGS with relative tolerance.
+fn integrate_qags<F>(f: F, a: f64, b: f64, epsabs: f64, epsrel: f64) -> (f64, f64)
+where
+    F: Fn(f64) -> f64,
+{
+    // Wrap closure into a C-style function via a boxed closure
+    let mut ws = IntegrationWorkspace::new(10_000).expect("workspace");
+
+    // GSL expects a Fn(f64, &mut dyn Any) -> f64 style; use rgsl helper
+    let func = |x: f64| f(x);
+
+    let (result, abserr) = ws.qags(func, a, b, epsabs, epsrel, 50)
+        .expect("integration failed");
+
+    (result, abserr)
+}
+
+/// Compute chen_likelihood(values) -> log-likelihood ratio
+/// values = (xj, nj, c, p2, var)
+pub fn chen_likelihood(values: (u64, u64, f64, f64, f64)) -> f64 {
+    let (xj, nj, c, p2, var) = values;
+
+    // Integral bounds and tolerances matching SciPy quad
+    let a = 0.001;
+    let b = 0.999;
+    let epsabs = 0.0;
+    let epsrel = 1e-3;
+
+    // i_likl = ∫ pdf_integral dp1
+    let (i_likl, _err1) = integrate_qags(
+        |p1| pdf_integral_scalar(p1, xj, nj, c, p2, var),
+        a, b, epsabs, epsrel,
+    );
+
+    // i_base = ∫ pdf dp1
+    let (i_base, _err2) = integrate_qags(
+        |p1| pdf_scalar(p1, c, p2, var),
+        a, b, epsabs, epsrel,
+    );
+
+    // Mirror Python behavior on zeros
+    if i_likl == 0.0 || i_base == 0.0 {
+        -1800.0
+    } else {
+        i_likl.ln() - i_base.ln()
+    }
+}
+
+
 // Standard function
-fn compute_pdens(p1: &[f32], c: f32, p2: f32, var: f32) -> Result<Vec<f32>> {
+fn compute_pdens(p1: &[f64], c: f64, p2: f64, var: f64) -> Result<Vec<f64>> {
     // First term
-    let a_term: f32 = (2f32 * PI * var).sqrt().powf(-1.0);
+    let a_term: f64 = (2f64 * PI * var).sqrt().powf(-1.0);
 
     // Create the target vector
-    let mut r: Vec<f32> = vec![0f32; p1.len()];
+    let mut r: Vec<f64> = vec![0f64; p1.len()];
 
     // Extract values where p1 is greater then 1-c
     let bisector = PartialBisector::new(p1);
     let left = bisector.bisect_left(&c);
-    let right = bisector.bisect_right(&(1f32 - c));
+    let right = bisector.bisect_right(&(1f64 - c));
 
     // left hand side
     let b_term_l = &p1[0..left]
         .iter()
-        .map(|i| (c - i) / (c.powf(2f32)))
-        .collect::<Vec<f32>>();
+        .map(|i| (c - i) / (c.powf(2f64)))
+        .collect::<Vec<f64>>();
     let c_term_l = &p1[0..left]
         .iter()
-        .map(|i| (i - (c * p2)).powf(2f32) / (2f32 * c.powf(2f32) * var))
-        .collect::<Vec<f32>>();
+        .map(|i| (i - (c * p2)).powf(2f64) / (2f64 * c.powf(2f64) * var))
+        .collect::<Vec<f64>>();
     let l_slice = &mut r[..left];
     for ((l_i, &b), &c) in l_slice.iter_mut().zip(b_term_l).zip(c_term_l) {
         *l_i += a_term * b * (-c).exp();
@@ -164,12 +263,12 @@ fn compute_pdens(p1: &[f32], c: f32, p2: f32, var: f32) -> Result<Vec<f32>> {
     // Repeat for right term
     let b_term_r = &p1[right..]
         .iter()
-        .map(|i| (c - i) / (c.powf(2f32)))
-        .collect::<Vec<f32>>();
+        .map(|i| (c - i) / (c.powf(2f64)))
+        .collect::<Vec<f64>>();
     let c_term_r = &p1[right..]
         .iter()
-        .map(|i| (i - (c * p2)).powf(2f32) / (2f32 * c.powf(2f32) * var))
-        .collect::<Vec<f32>>();
+        .map(|i| (i - (c * p2)).powf(2f64) / (2f64 * c.powf(2f64) * var))
+        .collect::<Vec<f64>>();
     let r_slice = &mut r[right..];
     for ((r_i, &b), &c) in r_slice.iter_mut().zip(b_term_r).zip(c_term_r) {
         *r_i += a_term * b * (-c).exp();
@@ -178,7 +277,7 @@ fn compute_pdens(p1: &[f32], c: f32, p2: f32, var: f32) -> Result<Vec<f32>> {
     Ok(r)
 }
 
-pub fn pdens_binomial(p1: &[f32], xj: u64, nj: u64, c: f32, p2: f32, var: f32) -> Result<Vec<f32>> {
+pub fn pdens_binomial(p1: &[f64], xj: u64, nj: u64, c: f64, p2: f64, var: f64) -> Result<Vec<f64>> {
     // Compute dens first
     let dens = compute_pdens(p1, c, p2, var).expect("Can't compute dens");
 
@@ -189,13 +288,13 @@ pub fn pdens_binomial(p1: &[f32], xj: u64, nj: u64, c: f32, p2: f32, var: f32) -
         .map(|(p, d)| {
             d * Binomial::new(*p as f64, nj)
                 .expect("Can't compute binomial distribution")
-                .pmf(xj) as f32
+                .pmf(xj) as f64
         })
-        .collect::<Vec<f32>>();
+        .collect::<Vec<f64>>();
     Ok(binomials)
 }
 
-pub fn pden_binomial(p1_val: f32, xj: u64, nj: u64, c: f32, p2: f32, var: f32) -> Result<f32> {
+pub fn pden_binomial(p1_val: f64, xj: u64, nj: u64, c: f64, p2: f64, var: f64) -> Result<f64> {
     // a_term = 1 / sqrt(2 * PI * var)
     let a_term = 1.0 / (2.0 * PI * var).sqrt();
 
@@ -221,190 +320,55 @@ pub fn pden_binomial(p1_val: f32, xj: u64, nj: u64, c: f32, p2: f32, var: f32) -
 
     // Apply binomial pmf weight
     let binom = Binomial::new(p1_val as f64, nj).expect("Cannot compute binomial");
-    let pmf_val = binom.pmf(xj) as f32;
+    let pmf_val = binom.pmf(xj) as f64;
 
     let result = density * pmf_val;
 
     Ok(result)
 }
 
-struct Pdensity {
-    c: f32,
-    p2: f32,
-    var: f32,
-}
+fn compute_chen_likelihood(xj: u64, nj: u64, c: f64, p2: f64, var: f64) -> Result<f64> {
+    // Integral bounds and tolerances matching SciPy quad
+    let a = 0.001;
+    let b = 0.999;
+    let epsabs = 0.0;
+    let epsrel = 1e-3;
 
-impl Integrable for Pdensity {
-    type Input = f32;
-    type Output = f32;
+    // i_likl = ∫ pdf_integral dp1
+    let (like_i, _err1) = integrate_qags(
+        |p1| pdf_integral_scalar(p1, xj, nj, c, p2, var),
+        a, b, epsabs, epsrel,
+    );
 
-    fn integrand(&self, input: &Self::Input) -> Result<Self::Output, EvaluationError<Self::Input>> {
-        let c = self.c;
-        let p2 = self.p2;
-        let var = self.var;
+    // i_base = ∫ pdf dp1
+    let (like_b, _err2) = integrate_qags(
+        |p1| pdf_scalar(p1, c, p2, var),
+        a, b, epsabs, epsrel,
+    );
 
-        // Compute p_density component at this input point "input"
-        // We rewrite compute_pdens logic for a single scalar input
-        let p1_val = *input;
-
-        // a_term = 1 / sqrt(2 * PI * var)
-        let a_term = 1.0 / (2.0 * PI * var).sqrt();
-
-        // decide which branch depending on p1_val in relation to c and 1-c
-        // You may adapt the bisect logic or simply partition manually here for scalar input
-
-        // For example, approximate the b_term and c_term as per formulas:
-        let (b_term, c_term) = if p1_val < c {
-            let b = (c - p1_val) / (c * c);
-            let c_t = (p1_val - c * p2).powi(2) / (2.0 * c.powi(2) * var);
-            (b, c_t)
-        } else if p1_val > 1.0 - c {
-            let b = (p1_val + c - 1.0) / (c * c);
-            let c_t = (p1_val + c - 1.0 - c * p2).powi(2) / (2.0 * c.powi(2) * var);
-            (b, c_t)
-        } else {
-            // Between c and 1 - c, density is zero (or negligible)
-            return Ok(0.0);
-        };
-
-        // Compute Gaussian-like term
-        let density = a_term * b_term * (-c_term).exp();
-
-        Ok(density)
-    }
-}
-
-struct PdensityBinom {
-    c: f32,
-    p2: f32,
-    var: f32,
-    xj: u64,
-    nj: u64,
-}
-
-impl Integrable for PdensityBinom {
-    type Input = f32;
-    type Output = f32;
-
-    fn integrand(&self, input: &Self::Input) -> Result<Self::Output, EvaluationError<Self::Input>> {
-        let c = self.c;
-        let p2 = self.p2;
-        let var = self.var;
-        let xj = self.xj;
-        let nj = self.nj;
-
-        // Compute p_density component at this input point "input"
-        // We rewrite compute_pdens logic for a single scalar input
-        let p1_val = *input;
-
-        // a_term = 1 / sqrt(2 * PI * var)
-        let a_term = 1.0 / (2.0 * PI * var).sqrt();
-
-        // decide which branch depending on p1_val in relation to c and 1-c
-        // You may adapt the bisect logic or simply partition manually here for scalar input
-
-        // For example, approximate the b_term and c_term as per formulas:
-        let (b_term, c_term) = if p1_val < c {
-            let b = (c - p1_val) / (c * c);
-            let c_t = (p1_val - c * p2).powi(2) / (2.0 * c.powi(2) * var);
-            (b, c_t)
-        } else if p1_val > 1.0 - c {
-            let b = (p1_val + c - 1.0) / (c * c);
-            let c_t = (p1_val + c - 1.0 - c * p2).powi(2) / (2.0 * c.powi(2) * var);
-            (b, c_t)
-        } else {
-            // Between c and 1 - c, density is zero (or negligible)
-            return Ok(0.0);
-        };
-
-        // Compute Gaussian-like term
-        let density = a_term * b_term * (-c_term).exp();
-
-        // Apply binomial pmf weight
-        // Use statrs crate Binomial for pmf
-        let binom = Binomial::new(p1_val as f64, nj).expect("Cannot compute binomial");
-        let pmf_val = binom.pmf(xj) as f32;
-
-        let result = density * pmf_val;
-
-        Ok(result)
-    }
-}
-
-fn compute_chen_likelihood(xj: u64, nj: u64, c: f32, p2: f32, var: f32) -> Result<f32> {
-    // Default integrator
-    let integrator_pdf = Integrator::default().relative_tolerance(0.001);
-    let integrator_bin = Integrator::default().relative_tolerance(0.001);
-
-    // Prepare integrands
-    let integrand_pdf = Pdensity { c, p2, var };
-    let integrand_bin = PdensityBinom { c, p2, var, xj, nj };
-
-    // Integration range on p1 values, for example [0.0, 1.0]
-    let like_b = integrator_pdf
-        .integrate(integrand_pdf, 0.001f32..0.999)
-        .expect("Invalid integral")
-        .result
-        .result
-        .expect("Not a valid number");
-    let like_i = integrator_bin
-        .integrate(integrand_bin, 0.001f32..0.999)
-        .expect("Invalid integral")
-        .result
-        .result
-        .expect("Not a valid number");
-    
-    // Return the right value
-    let ratio = if like_i > 0.0 && like_b > 0.0 {
-        (like_i.ln()) - (like_b.ln())
+    // Mirror Python behavior on zeros
+    let ratio = if like_i == 0.0 || like_b == 0.0 {
+        -1800.0
     } else {
-        -1800_f32
+        like_i.ln() - like_b.ln()
     };
-    log::debug!("xj: {xj} nj: {nj} c: {c} p1: {p2} var: {var} like_b: {like_b} like_i: {like_i} ratio: {ratio}");
     Ok(ratio)
-}
-
-// Second likelihood method
-fn compute_romberg_likelihood(xj: u64, nj: u64, c: f32, p2: f32, var: f32) -> Result<f32> {
-    let options = RombergOptions {
-        max_iters: 50,                 // corresponds to divmax in SciPy
-        abs_tol: 1.48e-6,              // absolute tolerance
-        rel_tol: 1.48e-6,              // relative tolerance
-        max_true_dimension: 3,         // default
-        min_monte_carlo_samples: 1000, // fallback param
-    };
-
-    // Wrapper to run the function correctly
-    let pdf_integral = |p1_val: f32| {
-        // Use the captured `values` here to compute the integrand at x
-        // For example, you can call your Rust implementation of pdf_integral:
-        pden_binomial(p1_val, xj, nj, c, p2, var).expect("Cannot compute pdensity")
-    };
-
-    // Compute romberg integration
-    let cl = romberg(pdf_integral, 0.0, 1.0, Some(options))?.value.ln();
-    // Return acceptable value
-    if cl.is_finite() {
-        Ok(cl)
-    } else {
-        Ok(-1800f32)
-    }
 }
 
 // Compute composite likelihood
 fn compute_complikelihood(
-    sc_m: (f32, Option<usize>),
+    sc_m: (f64, Option<usize>),
     xs: &[u64],
     ns: &[u64],
-    rds: &[f32],
-    p2freqs: &[f32],
-    weights: &[f32],
-    omegas: &[f32],
-) -> Result<f32> {
+    rds: &[f64],
+    p2freqs: &[f64],
+    weights: &[f64],
+    omegas: &[f64],
+) -> Result<f64> {
     let sc = sc_m.0;
-    let method = sc_m.1.unwrap_or(0);
+    let _method = sc_m.1.unwrap_or(0);
     if !(0.0..1.0).contains(&sc) {
-        Ok(f32::INFINITY)
+        Ok(f64::INFINITY)
     } else {
         let marginall = &(xs, ns, rds, p2freqs, weights, omegas)
             .into_par_iter()
@@ -414,39 +378,40 @@ fn compute_complikelihood(
                 // Compute C
                 let c = compute_c(*r, sc, None, None, None).expect("Cannot compute C");
                 // Compute likelihood
-                let cl = match method {
-                    1 => compute_romberg_likelihood(*xj, *nj, c, *p2, var),
-                    _ => compute_chen_likelihood(*xj, *nj, c, *p2, var),
-                }
-                .expect("Cannot compute the likelihood");
+                let cl = compute_chen_likelihood(*xj, *nj, c, *p2, var).expect("Cannot compute the likelihood");
+                // let cl = match method {
+                //     1 => compute_romberg_likelihood(*xj, *nj, c, *p2, var),
+                //     _ => compute_chen_likelihood(*xj, *nj, c, *p2, var),
+                // }
+                // .expect("Cannot compute the likelihood");
                 // Return the weighted margin
-                log::debug!("w: {omega} p2: {p2} r: {r} sc: {sc} var: {var} xj: {xj}, nj: {nj} c: {c} cl: {cl} weight: {weight} c*weight: {}", cl * *weight);
+                println!("w: {omega} p2: {p2} r: {r} sc: {sc} var: {var} xj: {xj}, nj: {nj} c: {c} cl: {cl} weight: {weight} c*weight: {}", cl * *weight);
                 cl * *weight
             })
-            .collect::<Vec<f32>>();
+            .collect::<Vec<f64>>();
         // final value
-        let ml: f32 = marginall.iter().sum();
+        let ml: f64 = marginall.iter().sum();
         Ok(-ml)
     }
 }
 
 fn compute_xpclr(
     counts: (&[u64], &[u64]),
-    rds: &[f32],
-    p2freqs: &[f32],
-    weights: &[f32],
-    omegas: &[f32],
-    sel_coeffs: &[f32],
+    rds: &[f64],
+    p2freqs: &[f64],
+    weights: &[f64],
+    omegas: &[f64],
+    sel_coeffs: &[f64],
     method: Option<usize>,
-) -> Result<(f32, f32, f32)> {
+) -> Result<(f64, f64, f64)> {
     // Extract counts
     let xs = counts.0;
     let ns = counts.1;
 
     // Define objectives
-    let mut maximum_li = f32::INFINITY;
-    let mut maxli_sc = 0.0f32;
-    let mut null_model_li = f32::INFINITY;
+    let mut maximum_li = f64::INFINITY;
+    let mut maxli_sc = 0.0f64;
+    let mut null_model_li = f64::INFINITY;
 
     // Define selection coefficient
     for (counter, sc) in sel_coeffs.iter().enumerate() {
@@ -493,8 +458,8 @@ fn get_window(
 }
 
 // Compute A1/A2 counts and A2 frequency
-fn pair_gt_to_af(gt1_m: &[Vec<Genotype>], gt2_m: &[Vec<Genotype>]) -> Result<(Vec<u32>, Vec<u64>, Vec<u64>, Vec<f32>, Vec<u64>, Vec<u64>, Vec<f32>)> {
-    let vals: Vec<(u32, u64, u64, f32, u64, u64, f32)> = gt1_m
+fn pair_gt_to_af(gt1_m: &[Vec<Genotype>], gt2_m: &[Vec<Genotype>]) -> Result<(Vec<u32>, Vec<u64>, Vec<u64>, Vec<f64>, Vec<u64>, Vec<u64>, Vec<f64>)> {
+    let vals: Vec<(u32, u64, u64, f64, u64, u64, f64)> = gt1_m
         .iter()
         .zip(gt2_m)
         .map(|(gts1, gts2)| {
@@ -521,16 +486,16 @@ fn pair_gt_to_af(gt1_m: &[Vec<Genotype>], gt2_m: &[Vec<Genotype>]) -> Result<(Ve
             let ref_counts2 = counts2
                 .get(ref_allele)
                 .unwrap_or(&0);
-            let alt_counts1 = (tot_counts1 - ref_counts1) as f32;
-            let alt_counts2 = (tot_counts2 - ref_counts2) as f32;
+            let alt_counts1 = (tot_counts1 - ref_counts1) as f64;
+            let alt_counts2 = (tot_counts2 - ref_counts2) as f64;
             (
                 *ref_allele,
                 tot_counts1 as u64,
                 alt_counts1 as u64,
-                alt_counts1 / (tot_counts1 as f32),
+                alt_counts1 / (tot_counts1 as f64),
                 tot_counts2 as u64,
                 alt_counts2 as u64,
-                alt_counts2 / (tot_counts2 as f32),
+                alt_counts2 / (tot_counts2 as f64),
             )
         })
         .collect();
@@ -540,7 +505,7 @@ fn pair_gt_to_af(gt1_m: &[Vec<Genotype>], gt2_m: &[Vec<Genotype>]) -> Result<(Ve
 // Attempt to compute the LD using the same method as scikit-allele 
 // [here](https://github.com/cggh/scikit-allel/blob/master/allel/opt/stats.pyx#L90)
 // and [here]()
-fn gn_pairwise_corrcoef_int8(gn: &[Vec<i8>]) -> Result<Vec<Vec<f32>>> {
+fn gn_pairwise_corrcoef_int8(gn: &[Vec<i8>]) -> Result<Vec<Vec<f64>>> {
     let n = gn.len();
     // Precompute gn_sq[i][k] = gn[i][k]^2
     let gn_sq: Vec<Vec<i8>> = gn
@@ -549,7 +514,7 @@ fn gn_pairwise_corrcoef_int8(gn: &[Vec<i8>]) -> Result<Vec<Vec<f32>>> {
         .collect();
 
     // Create square matrix
-    let mut out = vec![vec![1.0_f32; n]; n];
+    let mut out = vec![vec![0.0_f64; n]; n];
 
     // Iterate through the variants
     for i in 0..(n-1) {
@@ -560,8 +525,8 @@ fn gn_pairwise_corrcoef_int8(gn: &[Vec<i8>]) -> Result<Vec<Vec<f32>>> {
             let gn1_sq = &gn_sq[j];
 
             let r = gn_corrcoef_int8(gn0, gn1, gn0_sq, gn1_sq);
-            out[i][j] = r;
-            out[j][i] = r;
+            out[i][j] = r.powi(2);
+            out[j][i] = r.powi(2);
         }
     };
 
@@ -569,31 +534,31 @@ fn gn_pairwise_corrcoef_int8(gn: &[Vec<i8>]) -> Result<Vec<Vec<f32>>> {
 }
 
 // Example reimplementation of gn_corrcoef_int8 in Rust
-fn gn_corrcoef_int8(a: &[i8], b: &[i8], a_sq: &[i8], b_sq: &[i8]) -> f32 {
-    // Convert to f32 and compute Pearson correlation
-    let mut m0: f32 = 0.0;
-    let mut m1: f32 = 0.0;
-    let mut v0: f32 = 0.0;
-    let mut v1: f32 = 0.0;
-    let mut cov: f32 = 0.0;
-    let mut n: f32 = 0.0;
+fn gn_corrcoef_int8(a: &[i8], b: &[i8], a_sq: &[i8], b_sq: &[i8]) -> f64 {
+    // Convert to f64 and compute Pearson correlation
+    let mut m0: f64 = 0.0;
+    let mut m1: f64 = 0.0;
+    let mut v0: f64 = 0.0;
+    let mut v1: f64 = 0.0;
+    let mut cov: f64 = 0.0;
+    let mut n: f64 = 0.0;
 
     // perform sums
     for i in 0..a.len() {
         let x = a[i];
         let y = b[i];
         if x >= 0 && y >= 0 {
-            n += 1.0f32;
-            m0 += x as f32;
-            m1 += y as f32;
-            v0 += a_sq[i] as f32;
-            v1 += b_sq[i] as f32;
-            cov += (x * y) as f32;
+            n += 1.0f64;
+            m0 += x as f64;
+            m1 += y as f64;
+            v0 += a_sq[i] as f64;
+            v1 += b_sq[i] as f64;
+            cov += (x * y) as f64;
         }
     };
 
     if n == 0.0 || v0 == 0.0 || v1 == 0.0 {
-        return f32::NAN;
+        return f64::NAN;
     }
 
     // Reproduce logic
@@ -662,7 +627,7 @@ fn gt2gcounts(gt_m: Vec<&Vec<Genotype>>, ref_all: Vec<u32>) -> Vec<Vec<i8>> {
 }
 
 // LD cutoff
-fn apply_cutoff(matrix: &[Vec<f32>], cutoff: f32) -> Vec<Vec<bool>> {
+fn apply_cutoff(matrix: &[Vec<f64>], cutoff: f64) -> Vec<Vec<bool>> {
     matrix
         .iter()
         .map(|row| {
@@ -681,9 +646,9 @@ fn apply_cutoff(matrix: &[Vec<f32>], cutoff: f32) -> Vec<Vec<bool>> {
 fn compute_weights(
     gt_m: Vec<&Vec<Genotype>>,
     ref_all: Vec<u32>,
-    ldcutoff: f32,
+    ldcutoff: f64,
     isphased: bool,
-) -> Result<Vec<f32>> {
+) -> Result<Vec<f64>> {
     // First create a matrix that can be used to compute the LD
     let d = if isphased {
         gt2haplotypes(gt_m)
@@ -701,31 +666,31 @@ fn compute_weights(
     let weights = above_cut
         .iter()
         .map(|v| {
-            let summa: f32 = v
+            let summa: i32 = v
                 .iter()
                 .map(|b| match b {
-                    true => 1_f32,
-                    false => 0_f32,
+                    true => 1,
+                    false => 0,
                 })
                 .sum();
-            1_f32 / (summa + 1.0)
+            1_f64 / ((summa + 1) as f64)
         })
-        .collect::<Vec<f32>>();
+        .collect::<Vec<f64>>();
     Ok(weights)
 }
 
 // Main XP-CLR caller
 pub fn xpclr(
     (gt1, gt2): (Vec<Vec<Genotype>>, Vec<Vec<Genotype>>), // Genotypes
-    (bpositions, geneticd, windows): (Vec<usize>, Vec<f32>, Vec<(usize, usize)>), // Positions
-    (ldcutoff, phased): (Option<f32>, Option<bool>), // LD-related
+    (bpositions, geneticd, windows): (Vec<usize>, Vec<f64>, Vec<(usize, usize)>), // Positions
+    (ldcutoff, phased): (Option<f64>, Option<bool>), // LD-related
     (maxsnps, minsnps): (usize, usize),                   // Size/count filters
-) -> Result<Vec<(usize, (usize, usize, usize, usize, usize, usize), (f32, f32, f32, f32))>> {
+) -> Result<Vec<(usize, (usize, usize, usize, usize, usize, usize), (f64, f64, f64, f64))>> {
     let sel_coeffs = vec![
         0.0, 0.00001, 0.00005, 0.0001, 0.0002, 0.0004, 0.0006, 0.0008, 0.001, 0.003, 0.005, 0.01,
         0.05, 0.08, 0.1, 0.15,
     ];
-    let ldcutoff = ldcutoff.unwrap_or(0.95f32);
+    let ldcutoff = ldcutoff.unwrap_or(0.95f64);
     let isphased = phased.unwrap_or(false);
 
     // Get the allele frequencies first
@@ -736,7 +701,7 @@ pub fn xpclr(
     log::info!("Omega: {w}");
 
     // Process each window
-    let mut results: Vec<(usize, (usize, usize, usize, usize, usize, usize), (f32, f32, f32, f32))> = windows
+    let mut results: Vec<(usize, (usize, usize, usize, usize, usize, usize), (f64, f64, f64, f64))> = windows
         // Parallellize by window
         .par_iter()
         .enumerate()
@@ -746,16 +711,17 @@ pub fn xpclr(
             let max_ix = ix.iter().last().unwrap_or(&0_usize).to_owned();
             log::debug!("Window idx: {n}; Window BP interval: {start}-{stop}; N SNPs selected: {n_snps}; N SNP available: {n_avail}");
             if n_snps < minsnps {
-                let xpclr_vals = (f32::NAN, f32::NAN, f32::NAN, f32::NAN);
+                let xpclr_vals = (f64::NAN, f64::NAN, f64::NAN, f64::NAN);
                 (n, (*start, *stop, *start, *stop, n_snps, n_avail), xpclr_vals)
             } else {
                 let bpi = bpositions[ix[0]];
                 let bpe = bpositions[max_ix];
                 // Do not clone, just refer to them
-                let (gt_range, ar_range, gd_range, a1_range, t1_range, p2freqs): (Vec<&Vec<Genotype>>, Vec<u32>, Vec<f32>, Vec<u64>, Vec<u64>, Vec<f32>) = Itertools::multiunzip(ix.iter().map(|&i| (&gt2[i], &ar[i], &geneticd[i], &a1[i], &t1[i], &q2[i])));
+                let (gt_range, ar_range, gd_range, a1_range, t1_range, p2freqs): (Vec<&Vec<Genotype>>, Vec<u32>, Vec<f64>, Vec<u64>, Vec<u64>, Vec<f64>) = Itertools::multiunzip(ix.iter().map(|&i| (&gt2[i], &ar[i], &geneticd[i], &a1[i], &t1[i], &q2[i])));
                 // Compute distances from the average gen. dist.
                 let mdist = mean(&gd_range);
-                let rds = gd_range.iter().map(|d| d - mdist ).collect::<Vec<f32>>();
+                let rds = gd_range.iter().map(|d| d - mdist ).collect::<Vec<f64>>();
+
                 // Compute the weights
                 let weights = compute_weights(gt_range, ar_range, ldcutoff, isphased).expect("Failed to compute the weights");
                 let omegas = vec![w; rds.len()];
@@ -769,7 +735,7 @@ pub fn xpclr(
                     &sel_coeffs,
                     None
                 ).expect("Failed computing XP-CLR for window");
-                let xpclr_v = 2.0_f32 * (xpclr_res.0 - xpclr_res.1);
+                let xpclr_v = 2.0_f64 * (xpclr_res.0 - xpclr_res.1);
                 (n, (*start, *stop, bpi, bpe, n_snps, n_avail), (xpclr_res.0, xpclr_res.1, xpclr_res.2, xpclr_v))
             }
         })
@@ -778,3 +744,36 @@ pub fn xpclr(
     Ok(results)
 }
 
+
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_pdf_basic_shapes() {
+        // simple sanity checks (not exact values)
+        let c = 0.2;
+        let p2 = 0.4;
+        let var = 0.05;
+
+        // middle region: both conditions false
+        let mid = pdf_scalar(0.5, c, p2, var);
+        assert!(mid >= 0.0);
+
+        // near 0: left side can contribute if p1 < c
+        let left = pdf_scalar(0.05, c, p2, var);
+        assert!(left >= 0.0);
+
+        // near 1: right side can contribute if p1 > 1-c
+        let right = pdf_scalar(0.95, c, p2, var);
+        assert!(right >= 0.0);
+    }
+
+    #[test]
+    fn test_likelihood_runs() {
+        let val = chen_likelihood((10, 20, 0.2, 0.4, 0.05));
+        // Just ensure it’s finite and not NaN
+        assert!(val.is_finite());
+    }
+}

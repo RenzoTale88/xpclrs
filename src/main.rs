@@ -1,4 +1,4 @@
-use clap::{value_parser, Arg, Command};
+use clap::{value_parser, Arg, Command, builder::PossibleValue};
 use env_logger::{self, Env};
 use xpclrs::{
     io::{process_xcf, read_file, write_table, to_table},
@@ -56,7 +56,7 @@ fn main() {
                     .short('R')
                     .required(false)
                     .default_value("1e-8")
-                    .value_parser(value_parser!(f32))
+                    .value_parser(value_parser!(f64))
                     .help("Recombination rate per base."),
             )
             .arg(
@@ -65,7 +65,7 @@ fn main() {
                     .short('L')
                     .required(false)
                     .default_value("0.95")
-                    .value_parser(value_parser!(f32))
+                    .value_parser(value_parser!(f64))
                     .help("LD cutoff."),
             )
             .arg(
@@ -136,10 +136,29 @@ fn main() {
                     .value_parser(value_parser!(usize))
                     .help("Number of threads to use"),
             )
+            .arg(
+                Arg::new("LOG")
+                    .short('l')
+                    .long("log")
+                    .required(false)
+                    .default_value("info")
+                    .value_parser([
+                        PossibleValue::new("info"),
+                        PossibleValue::new("debug"),
+                    ])
+                    .help("Number of threads to use"),
+            )
             .get_matches();
 
     // set up logging
-    env_logger::Builder::from_env(Env::default().default_filter_or("info")).init();
+    let log_level = matches
+        .get_one::<String>("LOG")
+        .expect("Log level not valid")
+        .to_owned();
+    env_logger::Builder::from_env(Env::default().default_filter_or(log_level)).init();
+
+    // Initial logging
+    log::info!("xpclrs v{version}");
 
     // Fixed parameters
     let chrom = matches
@@ -151,8 +170,8 @@ fn main() {
     let end = matches.get_one::<u64>("STOP").copied();
     let minsnps = matches.get_one::<u64>("MINSNPS").copied().unwrap();
     let maxsnps = matches.get_one::<u64>("MAXSNPS").copied().unwrap();
-    let ldcutoff = matches.get_one::<f32>("LDCUTOFF").copied();
-    let rrate = matches.get_one::<f32>("RECRATE").copied();
+    let ldcutoff = matches.get_one::<f64>("LDCUTOFF").copied();
+    let rrate = matches.get_one::<f64>("RECRATE").copied();
     let phased = matches.get_one::<bool>("PHASED").copied();
 
     // Get the VCF
@@ -206,7 +225,7 @@ fn main() {
     };
     let windows = (start.unwrap()..end)
         .step_by(step as usize)
-        .map(|v| (v as usize, (v + step) as usize))
+        .map(|v| (v as usize, (v as usize) + (step as usize)))
         .collect::<Vec<(usize, usize)>>();
 
     // Define thread pool

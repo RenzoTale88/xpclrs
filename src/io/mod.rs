@@ -111,8 +111,8 @@ fn indexed_xcf(
     chrom: &str,
     start: u64,
     end: Option<u64>,
-    (rrate, _gdistkey): (Option<f32>, Option<String>),
-) -> Result<(Vec<usize>, Vec<Vec<Genotype>>, Vec<Vec<Genotype>>, Vec<f32>)> {
+    (rrate, _gdistkey): (Option<f64>, Option<String>),
+) -> Result<(Vec<usize>, Vec<Vec<Genotype>>, Vec<Vec<Genotype>>, Vec<f64>)> {
     log::info!("Indexed reader.");
     // Prepare the indexed reader
     let mut reader = IndexedReader::from_path(xcf_fn).expect("Cannot load indexed BCF/VCF file");
@@ -208,7 +208,7 @@ fn indexed_xcf(
                 None
             } else {
                 pass += 1;
-                Some((record.pos() as usize, gt1, gt2, record.pos() as f32 * rrate))
+                Some((record.pos() as usize, gt1, gt2, record.pos() as f64 * rrate))
             }
         })
         .multiunzip();
@@ -245,8 +245,8 @@ fn readthrough_xcf(
     chrom: &str,
     start: u64,
     end: Option<u64>,
-    (rrate, _gdistkey): (Option<f32>, Option<String>),
-) -> Result<(Vec<usize>, Vec<Vec<Genotype>>, Vec<Vec<Genotype>>, Vec<f32>)> {
+    (rrate, _gdistkey): (Option<f64>, Option<String>),
+) -> Result<(Vec<usize>, Vec<Vec<Genotype>>, Vec<Vec<Genotype>>, Vec<f64>)> {
     log::info!("Streamed reader.");
     log::info!("This is substantially slower than the indexed one.");
     log::info!("Consider generating an index for your BCF/VCF file.");
@@ -349,7 +349,7 @@ fn readthrough_xcf(
                 None
             } else {
                 pass += 1;
-                Some((record.pos() as usize, gt1, gt2, record.pos() as f32 * rrate))
+                Some((record.pos() as usize, gt1, gt2, record.pos() as f64 * rrate))
             }
         })
         .multiunzip();
@@ -387,8 +387,8 @@ pub fn process_xcf(
     chrom: &str,
     start: Option<u64>,
     end: Option<u64>,
-    (rrate, _gdistkey): (Option<f32>, Option<String>),
-) -> Result<(Vec<usize>, Vec<Vec<Genotype>>, Vec<Vec<Genotype>>, Vec<f32>)> {
+    (rrate, _gdistkey): (Option<f64>, Option<String>),
+) -> Result<(Vec<usize>, Vec<Vec<Genotype>>, Vec<Vec<Genotype>>, Vec<f64>)> {
     // Process the data depending on the presence of the index
     let start = start.unwrap_or(0);
     // Prepare the input VCF
@@ -428,7 +428,7 @@ pub fn write_table(filename: &str) -> Box<dyn Write> {
 // win index, (start and stop of window), (bpi and bpe are edges),  
 pub fn to_table(
     chrom: &str,
-    xpclr_res: Vec<(usize, (usize, usize, usize, usize, usize, usize), (f32, f32, f32, f32))>,
+    xpclr_res: Vec<(usize, (usize, usize, usize, usize, usize, usize), (f64, f64, f64, f64))>,
     xpclr_tsv: &mut Box<dyn std::io::Write>
 ) -> Result<()> {
     // Write header
@@ -442,7 +442,7 @@ pub fn to_table(
         } else {
             Some(v.2.3)
         })
-        .collect::<Vec<f32>>();
+        .collect::<Vec<f64>>();
     let mean_xpclr = mean( &xpclr_values );
     let std_xpclr = standard_deviation( &xpclr_values, None );
     log::info!("XP-CLR mean +/- st.d: {mean_xpclr} (+/-{std_xpclr})");
