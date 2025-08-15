@@ -223,7 +223,7 @@ fn compute_chen_likelihood(xj: u64, nj: u64, c: f64, p2: f64, var: f64) -> Resul
     } else {
         -1800_f64
     };
-    println!("{like_i} {like_b} {_err1} {_err2} {} {} {ratio}", like_i.ln(), like_b.ln());
+    //println!("{like_i} {like_b} {_err1} {_err2} {} {} {ratio}", like_i.ln(), like_b.ln());
     Ok(ratio)
 }
 
@@ -287,7 +287,7 @@ fn compute_xpclr(
         if counter == 0 {
             null_model_li = ll;
         }
-        println!("{counter} {sc} {ll}");
+        // println!("{counter} {sc} {ll}");
         // Replace values
         if ll < maximum_li {
             maximum_li = ll;
@@ -296,7 +296,7 @@ fn compute_xpclr(
             break;
         }
     }
-    println!("{maximum_li} {null_model_li} {maxli_sc}\n\n");
+    // println!("{maximum_li} {null_model_li} {maxli_sc}\n\n");
     Ok((-maximum_li, -null_model_li, maxli_sc))
 }
 
@@ -594,7 +594,7 @@ pub fn xpclr(
                 let weights = compute_weights(gt_range, ar_range, ldcutoff, isphased).expect("Failed to compute the weights");
                 let omegas = vec![w; rds.len()];
                 // Compute XP-CLR
-                println!("{start} {stop}");
+                // println!("{start} {stop}");
                 let xpclr_res = compute_xpclr(
                     (&a1_range, &t1_range),
                     &rds,
