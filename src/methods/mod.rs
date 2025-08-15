@@ -6,12 +6,10 @@ use counter::Counter;
 use itertools::Itertools;
 use rand::prelude::IndexedRandom;
 use rayon::prelude::*;
-use rgsl::IntegrationWorkspace;
 use rust_htslib::bcf::record::{Genotype, GenotypeAllele};
 use statistical::mean;
-use statrs::distribution::{Binomial, Discrete};
-use std::f64::consts::PI;
-
+use std::f64::{consts::PI};
+use scirs2_integrate::quad::{quad, QuadOptions};
 
 // Drafted bisect left and right
 pub struct Bisector<'a, T> {
@@ -189,150 +187,23 @@ fn integrate_qags<F>(f: F, a: f64, b: f64, epsabs: f64, epsrel: f64) -> (f64, f6
 where
     F: Fn(f64) -> f64,
 {
-    // Wrap closure into a C-style function via a boxed closure
-    let mut ws = IntegrationWorkspace::new(10_000).expect("workspace");
-
-    // GSL expects a Fn(f64, &mut dyn Any) -> f64 style; use rgsl helper
-    let func = |x: f64| f(x);
-
-    let (result, abserr) = ws.qags(func, a, b, epsabs, epsrel, 50)
-        .expect("integration failed");
-
-    (result, abserr)
-}
-
-/// Compute chen_likelihood(values) -> log-likelihood ratio
-/// values = (xj, nj, c, p2, var)
-pub fn chen_likelihood(values: (u64, u64, f64, f64, f64)) -> f64 {
-    let (xj, nj, c, p2, var) = values;
-
-    // Integral bounds and tolerances matching SciPy quad
-    let a = 0.001;
-    let b = 0.999;
-    let epsabs = 0.0;
-    let epsrel = 1e-3;
-
-    // i_likl = ∫ pdf_integral dp1
-    let (i_likl, _err1) = integrate_qags(
-        |p1| pdf_integral_scalar(p1, xj, nj, c, p2, var),
-        a, b, epsabs, epsrel,
-    );
-
-    // i_base = ∫ pdf dp1
-    let (i_base, _err2) = integrate_qags(
-        |p1| pdf_scalar(p1, c, p2, var),
-        a, b, epsabs, epsrel,
-    );
-
-    // Mirror Python behavior on zeros
-    if i_likl == 0.0 || i_base == 0.0 {
-        -1800.0
-    } else {
-        i_likl.ln() - i_base.ln()
-    }
-}
-
-
-// Standard function
-fn compute_pdens(p1: &[f64], c: f64, p2: f64, var: f64) -> Result<Vec<f64>> {
-    // First term
-    let a_term: f64 = (2f64 * PI * var).sqrt().powf(-1.0);
-
-    // Create the target vector
-    let mut r: Vec<f64> = vec![0f64; p1.len()];
-
-    // Extract values where p1 is greater then 1-c
-    let bisector = PartialBisector::new(p1);
-    let left = bisector.bisect_left(&c);
-    let right = bisector.bisect_right(&(1f64 - c));
-
-    // left hand side
-    let b_term_l = &p1[0..left]
-        .iter()
-        .map(|i| (c - i) / (c.powf(2f64)))
-        .collect::<Vec<f64>>();
-    let c_term_l = &p1[0..left]
-        .iter()
-        .map(|i| (i - (c * p2)).powf(2f64) / (2f64 * c.powf(2f64) * var))
-        .collect::<Vec<f64>>();
-    let l_slice = &mut r[..left];
-    for ((l_i, &b), &c) in l_slice.iter_mut().zip(b_term_l).zip(c_term_l) {
-        *l_i += a_term * b * (-c).exp();
-    }
-
-    // Repeat for right term
-    let b_term_r = &p1[right..]
-        .iter()
-        .map(|i| (c - i) / (c.powf(2f64)))
-        .collect::<Vec<f64>>();
-    let c_term_r = &p1[right..]
-        .iter()
-        .map(|i| (i - (c * p2)).powf(2f64) / (2f64 * c.powf(2f64) * var))
-        .collect::<Vec<f64>>();
-    let r_slice = &mut r[right..];
-    for ((r_i, &b), &c) in r_slice.iter_mut().zip(b_term_r).zip(c_term_r) {
-        *r_i += a_term * b * (-c).exp();
-    }
-
-    Ok(r)
-}
-
-pub fn pdens_binomial(p1: &[f64], xj: u64, nj: u64, c: f64, p2: f64, var: f64) -> Result<Vec<f64>> {
-    // Compute dens first
-    let dens = compute_pdens(p1, c, p2, var).expect("Can't compute dens");
-
-    // Apply binomial function
-    let binomials = p1
-        .iter()
-        .zip(dens)
-        .map(|(p, d)| {
-            d * Binomial::new(*p as f64, nj)
-                .expect("Can't compute binomial distribution")
-                .pmf(xj) as f64
-        })
-        .collect::<Vec<f64>>();
-    Ok(binomials)
-}
-
-pub fn pden_binomial(p1_val: f64, xj: u64, nj: u64, c: f64, p2: f64, var: f64) -> Result<f64> {
-    // a_term = 1 / sqrt(2 * PI * var)
-    let a_term = 1.0 / (2.0 * PI * var).sqrt();
-
-    // decide which branch depending on p1_val in relation to c and 1-c
-    // You may adapt the bisect logic or simply partition manually here for scalar input
-
-    // For example, approximate the b_term and c_term as per formulas:
-    let (b_term, c_term) = if p1_val < c {
-        let b = (c - p1_val) / (c * c);
-        let c_t = (p1_val - c * p2).powi(2) / (2.0 * c.powi(2) * var);
-        (b, c_t)
-    } else if p1_val > 1.0 - c {
-        let b = (p1_val + c - 1.0) / (c * c);
-        let c_t = (p1_val + c - 1.0 - c * p2).powi(2) / (2.0 * c.powi(2) * var);
-        (b, c_t)
-    } else {
-        // Between c and 1 - c, density is zero (or negligible)
-        return Ok(0.0);
+    let options = QuadOptions {
+        abs_tol: epsabs,
+        rel_tol: epsrel,
+        max_evals: 50,
+        use_abs_error: false,
+        use_simpson: true,
     };
-
-    // Compute Gaussian-like term
-    let density = a_term * b_term * (-c_term).exp();
-
-    // Apply binomial pmf weight
-    let binom = Binomial::new(p1_val as f64, nj).expect("Cannot compute binomial");
-    let pmf_val = binom.pmf(xj) as f64;
-
-    let result = density * pmf_val;
-
-    Ok(result)
+    let result = quad(|x: f64| f(x), a, b, Some(options)).expect("Failed to compute the integral.");
+    (result.value, result.abs_error)
 }
 
 fn compute_chen_likelihood(xj: u64, nj: u64, c: f64, p2: f64, var: f64) -> Result<f64> {
     // Integral bounds and tolerances matching SciPy quad
     let a = 0.001;
     let b = 0.999;
-    let epsabs = 0.0;
-    let epsrel = 1e-3;
+    let epsabs = 1e-9;
+    let epsrel = 0.001;
 
     // i_likl = ∫ pdf_integral dp1
     let (like_i, _err1) = integrate_qags(
@@ -345,13 +216,14 @@ fn compute_chen_likelihood(xj: u64, nj: u64, c: f64, p2: f64, var: f64) -> Resul
         |p1| pdf_scalar(p1, c, p2, var),
         a, b, epsabs, epsrel,
     );
-
-    // Mirror Python behavior on zeros
-    let ratio = if like_i == 0.0 || like_b == 0.0 {
-        -1800.0
+    
+    // Return the right value    
+    let ratio = if like_i > 0.0 && like_b > 0.0 {
+        (like_i.ln()) - (like_b.ln())
     } else {
-        like_i.ln() - like_b.ln()
+        -1800_f64
     };
+    println!("{like_i} {like_b} {_err1} {_err2} {} {} {ratio}", like_i.ln(), like_b.ln());
     Ok(ratio)
 }
 
@@ -379,13 +251,7 @@ fn compute_complikelihood(
                 let c = compute_c(*r, sc, None, None, None).expect("Cannot compute C");
                 // Compute likelihood
                 let cl = compute_chen_likelihood(*xj, *nj, c, *p2, var).expect("Cannot compute the likelihood");
-                // let cl = match method {
-                //     1 => compute_romberg_likelihood(*xj, *nj, c, *p2, var),
-                //     _ => compute_chen_likelihood(*xj, *nj, c, *p2, var),
-                // }
-                // .expect("Cannot compute the likelihood");
                 // Return the weighted margin
-                log::debug!("w: {omega} p2: {p2} r: {r} sc: {sc} var: {var} xj: {xj}, nj: {nj} c: {c} cl: {cl} weight: {weight} c*weight: {}", cl * *weight);
                 cl * *weight
             })
             .collect::<Vec<f64>>();
@@ -421,6 +287,7 @@ fn compute_xpclr(
         if counter == 0 {
             null_model_li = ll;
         }
+        println!("{counter} {sc} {ll}");
         // Replace values
         if ll < maximum_li {
             maximum_li = ll;
@@ -429,6 +296,7 @@ fn compute_xpclr(
             break;
         }
     }
+    println!("{maximum_li} {null_model_li} {maxli_sc}\n\n");
     Ok((-maximum_li, -null_model_li, maxli_sc))
 }
 
@@ -726,6 +594,7 @@ pub fn xpclr(
                 let weights = compute_weights(gt_range, ar_range, ldcutoff, isphased).expect("Failed to compute the weights");
                 let omegas = vec![w; rds.len()];
                 // Compute XP-CLR
+                println!("{start} {stop}");
                 let xpclr_res = compute_xpclr(
                     (&a1_range, &t1_range),
                     &rds,
@@ -744,36 +613,3 @@ pub fn xpclr(
     Ok(results)
 }
 
-
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_pdf_basic_shapes() {
-        // simple sanity checks (not exact values)
-        let c = 0.2;
-        let p2 = 0.4;
-        let var = 0.05;
-
-        // middle region: both conditions false
-        let mid = pdf_scalar(0.5, c, p2, var);
-        assert!(mid >= 0.0);
-
-        // near 0: left side can contribute if p1 < c
-        let left = pdf_scalar(0.05, c, p2, var);
-        assert!(left >= 0.0);
-
-        // near 1: right side can contribute if p1 > 1-c
-        let right = pdf_scalar(0.95, c, p2, var);
-        assert!(right >= 0.0);
-    }
-
-    #[test]
-    fn test_likelihood_runs() {
-        let val = chen_likelihood((10, 20, 0.2, 0.4, 0.05));
-        // Just ensure it’s finite and not NaN
-        assert!(val.is_finite());
-    }
-}
