@@ -6,10 +6,12 @@ use counter::Counter;
 use itertools::Itertools;
 use rand::prelude::IndexedRandom;
 use rayon::prelude::*;
+use rgsl::IntegrationWorkspace;
 use rust_htslib::bcf::record::{Genotype, GenotypeAllele};
-use statistical::mean;
-use std::f64::{consts::PI};
 use scirs2_integrate::quad::{quad, QuadOptions};
+use statistical::mean;
+use statrs::distribution::{Binomial, Discrete};
+use std::f64::consts::PI;
 
 // Drafted bisect left and right
 pub struct Bisector<'a, T> {
@@ -99,17 +101,22 @@ pub fn est_omega(q1: &[f64], q2: &[f64]) -> Result<f64> {
     let w = mean(
         &q1.iter()
             .zip(q2)
-            .map(|(p, q)| {
-                ((p - q) * (p - q)) / (q * (1f64 - q))
-            })
-            .collect::<Vec<f64>>()
+            .map(|(p, q)| ((p - q).powi(2)) / (q * (1f64 - q)))
+            .collect::<Vec<f64>>(),
     );
     Ok(w)
 }
 
 // Measure variability for each SNP
 pub fn var_estimate(w: f64, q2: f64) -> Result<f64> {
-    Ok(w * (q2 * (1f64 - q2)))
+    log::debug!("{w} {q2} {} {} {}", 1.0_f64 - q2, q2 * (1.0_f64 - q2), w * (q2 * (1.0_f64 - q2)));
+    Ok(w * (q2 * (1.0_f64 - q2)))
+}
+
+// Rounding function
+fn round_to(x: f64, digits: u32) -> f64 {
+    let factor = 10_f64.powi(digits as i32);
+    (x * factor).round() / factor
 }
 
 // c is a proxy for selection strength.
@@ -119,22 +126,22 @@ pub fn compute_c(
     s: f64,
     ne: Option<u64>,
     minrd: Option<f64>,
-    sf: Option<u64>,
+    sf: Option<u32>,
 ) -> Result<f64> {
     let ne = ne.unwrap_or(20000) as f64;
     let minrd = minrd.unwrap_or(1e-7);
-    let _sf = sf.unwrap_or(5) as f64;
+    let sf = sf.unwrap_or(5);
     if s <= 0.0 {
         Ok(1.0)
     } else {
         let x = -((2.0 * ne).ln()) * (r.max(minrd)) / s;
-        Ok(1.0 - (x.exp()))
+        Ok(round_to(1.0 - (x.exp()), sf))
     }
 }
 
 /// Compute pdf(p1 | c, p2, var) matching the Python logic for scalar p1.
 fn pdf_scalar(p1: f64, c: f64, p2: f64, var: f64) -> f64 {
-    let a_term = ( (2.0 * PI * var).sqrt() ).recip();
+    let a_term = ((2.0 * PI * var).sqrt()).recip();
 
     let mut r = 0.0;
 
@@ -178,7 +185,9 @@ fn binom_pmf(x: u64, n: u64, p: f64) -> f64 {
 /// pdf_integral(p1) = pdf(p1) * BinomPMF(xj | nj, p1)
 fn pdf_integral_scalar(p1: f64, xj: u64, nj: u64, c: f64, p2: f64, var: f64) -> f64 {
     let dens = pdf_scalar(p1, c, p2, var);
-    let pmf = binom_pmf(xj, nj, p1);
+    let binom = Binomial::new(p1, nj).expect("Cannot generate binomial distr.");
+    let pmf = binom.pmf(xj);
+    // let pmf = binom_pmf(xj, nj, p1);
     dens * pmf
 }
 
@@ -198,32 +207,132 @@ where
     (result.value, result.abs_error)
 }
 
+fn integrate_qags_gsl<F>(f: F, a: f64, b: f64, epsabs: f64, epsrel: f64, limit: usize) -> (f64, f64)
+where
+    F: Fn(f64) -> f64,
+{
+    // QAGS: adaptive Gauss–Kronrod with singularity handling
+    let mut w = IntegrationWorkspace::new(limit).expect("GSL workspace alloc failed");
+    let func = |x: f64| f(x);
+    let (res, err) = w
+        .qags(func, a, b, epsabs, epsrel, limit)
+        .expect("GSL qags failed");
+    (res, err)
+}
+
+fn integrate_qagp_gsl<F>(
+    mut f: F,
+    a: f64,
+    b: f64,
+    interior_points: &mut [f64], // known breakpoints (excluding endpoints)
+    epsabs: f64,
+    epsrel: f64,
+    limit: usize,
+) -> (f64, f64)
+where
+    F: Fn(f64) -> f64,
+{
+    // QAGP: adaptive Gauss–Kronrod with user-supplied breakpoints
+    // pts must include endpoints a and b, sorted
+    let mut pts = Vec::with_capacity(interior_points.len() + 2);
+    pts.push(a);
+    pts.extend_from_slice(interior_points);
+    pts.push(b);
+    pts.sort_by(|x, y| x.partial_cmp(y).unwrap());
+
+    let mut w = IntegrationWorkspace::new(limit).expect("GSL workspace alloc failed");
+    let func = |x: f64| f(x);
+    let (res, err) = w
+        .qagp(func, &mut pts, epsabs, epsrel, limit)
+        .expect("GSL qagp failed");
+    (res, err)
+}
+
 fn compute_chen_likelihood(xj: u64, nj: u64, c: f64, p2: f64, var: f64) -> Result<f64> {
     // Integral bounds and tolerances matching SciPy quad
     let a = 0.001;
     let b = 0.999;
     let epsabs = 1e-9;
     let epsrel = 0.001;
+    let limit = 50; // number of subintervals (QUADPACK-style, like SciPy)
+    log::debug!("xj: {xj}, nj: {nj}, c: {c}, p2: {p2}, var: {var}");
 
-    // i_likl = ∫ pdf_integral dp1
-    let (like_i, _err1) = integrate_qags(
+    // Recommended: use QAGP with breakpoints at c and 1-c
+    let mut breaks = [c, 1.0 - c];
+
+    // Integral with binomial factor
+    let (like_i, _err_i) = integrate_qagp_gsl(
         |p1| pdf_integral_scalar(p1, xj, nj, c, p2, var),
-        a, b, epsabs, epsrel,
+        a,
+        b,
+        &mut breaks,
+        epsabs,
+        epsrel,
+        limit,
     );
 
-    // i_base = ∫ pdf dp1
-    let (like_b, _err2) = integrate_qags(
+    // Base integral of the pdf (denominator)
+    let (like_b, _err_b) = integrate_qagp_gsl(
         |p1| pdf_scalar(p1, c, p2, var),
-        a, b, epsabs, epsrel,
+        a,
+        b,
+        &mut breaks,
+        epsabs,
+        epsrel,
+        limit,
     );
-    
-    // Return the right value    
+
+    // // i_likl = ∫ pdf_integral dp1
+    // let (like_i, _err1) = integrate_qags(
+    //     |p1| pdf_integral_scalar(p1, xj, nj, c, p2, var),
+    //     a, b, epsabs, epsrel,
+    // );
+
+    // // i_base = ∫ pdf dp1
+    // let (like_b, _err2) = integrate_qags(
+    //     |p1| pdf_scalar(p1, c, p2, var),
+    //     a, b, epsabs, epsrel,
+    // );
+
+    // Return the right value
     let ratio = if like_i > 0.0 && like_b > 0.0 {
         (like_i.ln()) - (like_b.ln())
     } else {
         -1800_f64
     };
-    //println!("{like_i} {like_b} {_err1} {_err2} {} {} {ratio}", like_i.ln(), like_b.ln());
+    // log::debug!("{like_i} {like_b} {_err_i} {_err_b} {} {} {ratio}", like_i.ln(), like_b.ln());
+    Ok(ratio)
+}
+
+fn compute_chen_likelihood_qags(xj: u64, nj: u64, c: f64, p2: f64, var: f64) -> Result<f64> {
+    log::debug!("xj: {xj}, nj: {nj}, c: {c}, p2: {p2}, var: {var}");
+    let a = 0.001;
+    let b = 0.999;
+    let epsabs = 0.0;
+    let epsrel = 1e-3;
+    let limit = 50;
+
+    let (like_i, err_i) = integrate_qags_gsl(
+        |p1| pdf_integral_scalar(p1, xj, nj, c, p2, var),
+        a,
+        b,
+        epsabs,
+        epsrel,
+        limit,
+    );
+    let (like_b, err_b) =
+        integrate_qags_gsl(|p1| pdf_scalar(p1, c, p2, var), a, b, epsabs, epsrel, limit);
+
+    let ratio = if like_i > 0.0 && like_b > 0.0 {
+        like_i.ln() - like_b.ln()
+    } else {
+        -1800.0
+    };
+    // log::debug!(
+    //     "{like_i} {like_b} {err_i} {err_b} {} {} {ratio}",
+    //     like_i.ln(),
+    //     like_b.ln()
+    // );
     Ok(ratio)
 }
 
@@ -242,20 +351,21 @@ fn compute_complikelihood(
     if !(0.0..1.0).contains(&sc) {
         Ok(f64::INFINITY)
     } else {
-        let marginall = &(xs, ns, rds, p2freqs, weights, omegas)
-            .into_par_iter()
+        let marginall = itertools::izip!(xs, ns, rds, p2freqs, weights, omegas)
             .map(|(xj, nj, r, p2, weight, omega)| {
                 // compute the variance
                 let var = var_estimate(*omega, *p2).expect("Cannot compute variance");
                 // Compute C
-                let c = compute_c(*r, sc, None, None, None).expect("Cannot compute C");
+                let c = compute_c(*r, sc, None, None, Some(5_u32)).expect("Cannot compute C");
                 // Compute likelihood
-                let cl = compute_chen_likelihood(*xj, *nj, c, *p2, var).expect("Cannot compute the likelihood");
+                let cl = compute_chen_likelihood(*xj, *nj, c, *p2, var)
+                    .expect("Cannot compute the likelihood");
                 // Return the weighted margin
                 cl * *weight
             })
             .collect::<Vec<f64>>();
         // final value
+        log::debug!("{marginall:?}");
         let ml: f64 = marginall.iter().sum();
         Ok(-ml)
     }
@@ -287,7 +397,7 @@ fn compute_xpclr(
         if counter == 0 {
             null_model_li = ll;
         }
-        // println!("{counter} {sc} {ll}");
+        log::debug!("{counter} {sc} {ll}");
         // Replace values
         if ll < maximum_li {
             maximum_li = ll;
@@ -296,7 +406,7 @@ fn compute_xpclr(
             break;
         }
     }
-    // println!("{maximum_li} {null_model_li} {maxli_sc}\n\n");
+    log::debug!("{maximum_li} {null_model_li} {maxli_sc}\n\n");
     Ok((-maximum_li, -null_model_li, maxli_sc))
 }
 
@@ -326,7 +436,18 @@ fn get_window(
 }
 
 // Compute A1/A2 counts and A2 frequency
-fn pair_gt_to_af(gt1_m: &[Vec<Genotype>], gt2_m: &[Vec<Genotype>]) -> Result<(Vec<u32>, Vec<u64>, Vec<u64>, Vec<f64>, Vec<u64>, Vec<u64>, Vec<f64>)> {
+fn pair_gt_to_af(
+    gt1_m: &[Vec<Genotype>],
+    gt2_m: &[Vec<Genotype>],
+) -> Result<(
+    Vec<u32>,
+    Vec<u64>,
+    Vec<u64>,
+    Vec<f64>,
+    Vec<u64>,
+    Vec<u64>,
+    Vec<f64>,
+)> {
     let vals: Vec<(u32, u64, u64, f64, u64, u64, f64)> = gt1_m
         .iter()
         .zip(gt2_m)
@@ -348,12 +469,8 @@ fn pair_gt_to_af(gt1_m: &[Vec<Genotype>], gt2_m: &[Vec<Genotype>]) -> Result<(Ve
                 .expect("Can't compute the alt allele count");
             let tot_counts1: usize = counts1.values().sum();
             let tot_counts2: usize = counts2.values().sum();
-            let ref_counts1 = counts1
-                .get(ref_allele)
-                .unwrap_or(&0);
-            let ref_counts2 = counts2
-                .get(ref_allele)
-                .unwrap_or(&0);
+            let ref_counts1 = counts1.get(ref_allele).unwrap_or(&0);
+            let ref_counts2 = counts2.get(ref_allele).unwrap_or(&0);
             let alt_counts1 = (tot_counts1 - ref_counts1) as f64;
             let alt_counts2 = (tot_counts2 - ref_counts2) as f64;
             (
@@ -370,7 +487,7 @@ fn pair_gt_to_af(gt1_m: &[Vec<Genotype>], gt2_m: &[Vec<Genotype>]) -> Result<(Ve
     Ok(Itertools::multiunzip(vals.into_iter()))
 }
 
-// Attempt to compute the LD using the same method as scikit-allele 
+// Attempt to compute the LD using the same method as scikit-allele
 // [here](https://github.com/cggh/scikit-allel/blob/master/allel/opt/stats.pyx#L90)
 // and [here]()
 fn gn_pairwise_corrcoef_int8(gn: &[Vec<i8>]) -> Result<Vec<Vec<f64>>> {
@@ -385,7 +502,7 @@ fn gn_pairwise_corrcoef_int8(gn: &[Vec<i8>]) -> Result<Vec<Vec<f64>>> {
     let mut out = vec![vec![0.0_f64; n]; n];
 
     // Iterate through the variants
-    for i in 0..(n-1) {
+    for i in 0..(n - 1) {
         for j in (i + 1)..n {
             let gn0 = &gn[i];
             let gn1 = &gn[j];
@@ -396,7 +513,7 @@ fn gn_pairwise_corrcoef_int8(gn: &[Vec<i8>]) -> Result<Vec<Vec<f64>>> {
             out[i][j] = r.powi(2);
             out[j][i] = r.powi(2);
         }
-    };
+    }
 
     Ok(out)
 }
@@ -423,7 +540,7 @@ fn gn_corrcoef_int8(a: &[i8], b: &[i8], a_sq: &[i8], b_sq: &[i8]) -> f64 {
             v1 += b_sq[i] as f64;
             cov += (x * y) as f64;
         }
-    };
+    }
 
     if n == 0.0 || v0 == 0.0 || v1 == 0.0 {
         return f64::NAN;
@@ -551,19 +668,27 @@ fn compute_weights(
 pub fn xpclr(
     (gt1, gt2): (Vec<Vec<Genotype>>, Vec<Vec<Genotype>>), // Genotypes
     (bpositions, geneticd, windows): (Vec<usize>, Vec<f64>, Vec<(usize, usize)>), // Positions
-    (ldcutoff, phased): (Option<f64>, Option<bool>), // LD-related
+    (ldcutoff, phased): (Option<f64>, Option<bool>),      // LD-related
     (maxsnps, minsnps): (usize, usize),                   // Size/count filters
-) -> Result<Vec<(usize, (usize, usize, usize, usize, usize, usize), (f64, f64, f64, f64))>> {
+) -> Result<
+    Vec<(
+        usize,
+        (usize, usize, usize, usize, usize, usize),
+        (f64, f64, f64, f64),
+    )>,
+> {
     let sel_coeffs = vec![
         0.0, 0.00001, 0.00005, 0.0001, 0.0002, 0.0004, 0.0006, 0.0008, 0.001, 0.003, 0.005, 0.01,
         0.05, 0.08, 0.1, 0.15,
     ];
+
     let ldcutoff = ldcutoff.unwrap_or(0.95f64);
     let isphased = phased.unwrap_or(false);
 
     // Get the allele frequencies first
-    let (ar, t1, a1, q1, _t2, _a2, q2) = pair_gt_to_af(&gt1, &gt2).expect("Failed to copmute the AF for pop 1");
-    
+    let (ar, t1, a1, q1, _t2, _a2, q2) =
+        pair_gt_to_af(&gt1, &gt2).expect("Failed to copmute the AF for pop 1");
+
     // Then, let's compute the omega
     let w = est_omega(&q1, &q2).expect("Cannot compute omega");
     log::info!("Omega: {w}");
@@ -594,7 +719,7 @@ pub fn xpclr(
                 let weights = compute_weights(gt_range, ar_range, ldcutoff, isphased).expect("Failed to compute the weights");
                 let omegas = vec![w; rds.len()];
                 // Compute XP-CLR
-                // println!("{start} {stop}");
+                log::debug!("{start} {stop} {} {p2freqs:?}", rds.len());
                 let xpclr_res = compute_xpclr(
                     (&a1_range, &t1_range),
                     &rds,
@@ -612,4 +737,3 @@ pub fn xpclr(
     results.sort_by_key(|item| item.0);
     Ok(results)
 }
-

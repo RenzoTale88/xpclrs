@@ -6,12 +6,10 @@ use counter::Counter;
 use flate2::write;
 use flate2::Compression;
 use itertools::MultiUnzip;
-use rust_htslib::{
-    bcf::{
-        self,
-        record::{Genotype, GenotypeAllele},
-        IndexedReader, Read, Reader,
-    },
+use rust_htslib::bcf::{
+    self,
+    record::{Genotype, GenotypeAllele},
+    IndexedReader, Read, Reader,
 };
 use statistical::{mean, standard_deviation};
 use std::{
@@ -19,12 +17,7 @@ use std::{
     ffi::OsStr,
     fmt::Display,
     fs::File,
-    io::{
-        BufRead,
-        BufReader,
-        BufWriter,
-        Write
-    },
+    io::{BufRead, BufReader, BufWriter, Write},
     path::Path,
 };
 
@@ -425,31 +418,40 @@ pub fn write_table(filename: &str) -> Box<dyn Write> {
 // The following results
 // n, (start, stop, bpi, bpe, nsnps, avail), (model_li, null_li, selectionc)
 // Map to:
-// win index, (start and stop of window), (bpi and bpe are edges),  
+// win index, (start and stop of window), (bpi and bpe are edges),
 pub fn to_table(
     chrom: &str,
-    xpclr_res: Vec<(usize, (usize, usize, usize, usize, usize, usize), (f64, f64, f64, f64))>,
-    xpclr_tsv: &mut Box<dyn std::io::Write>
+    xpclr_res: Vec<(
+        usize,
+        (usize, usize, usize, usize, usize, usize),
+        (f64, f64, f64, f64),
+    )>,
+    xpclr_tsv: &mut Box<dyn std::io::Write>,
+    outfmt: &str,
 ) -> Result<()> {
+    let delim = match outfmt {
+        "tsv" => "\t",
+        "txt" => " ",
+        "csv" => ",",
+        _ => "\t",
+    };
     // Write header
-    writeln!(xpclr_tsv, "chrom,start,stop,pos_start,pos_stop,modelL,nullL,sel_coef,nSNPs,nSNPs_avail,xpclr,xpclr_norm")?;
+    writeln!(xpclr_tsv, "chrom{delim}start{delim}stop{delim}pos_start{delim}pos_stop{delim}modelL{delim}nullL{delim}sel_coef{delim}nSNPs{delim}nSNPs_avail{delim}xpclr{delim}xpclr_norm")?;
 
     // Compute normalizing factors
     let xpclr_values = xpclr_res
         .iter()
-        .filter_map(|&v| if v.2.3.is_nan() {
-            None
-        } else {
-            Some(v.2.3)
-        })
+        .filter_map(|&v| if v.2 .3.is_nan() { None } else { Some(v.2 .3) })
         .collect::<Vec<f64>>();
-    let mean_xpclr = mean( &xpclr_values );
-    let std_xpclr = standard_deviation( &xpclr_values, None );
+    let mean_xpclr = mean(&xpclr_values);
+    let std_xpclr = standard_deviation(&xpclr_values, None);
     log::info!("XP-CLR mean +/- st.d: {mean_xpclr} (+/-{std_xpclr})");
 
-    for (_n, (start, stop, bpi, bpe, nsnps, avail), (model_li, null_li, selectionc, xpclr)) in xpclr_res {
+    for (_n, (start, stop, bpi, bpe, nsnps, avail), (model_li, null_li, selectionc, xpclr)) in
+        xpclr_res
+    {
         let xpclr_normalized = (xpclr - mean_xpclr) / std_xpclr;
-        writeln!(xpclr_tsv, "{chrom},{start},{stop},{bpi},{bpe},{model_li},{null_li},{selectionc},{nsnps},{avail},{xpclr},{xpclr_normalized}")?;
+        writeln!(xpclr_tsv, "{chrom}{delim}{start}{delim}{stop}{delim}{bpi}{delim}{bpe}{delim}{model_li}{delim}{null_li}{delim}{selectionc}{delim}{nsnps}{delim}{avail}{delim}{xpclr}{delim}{xpclr_normalized}")?;
     }
 
     Ok(())

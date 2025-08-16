@@ -1,7 +1,7 @@
-use clap::{value_parser, Arg, Command, builder::PossibleValue};
+use clap::{builder::PossibleValue, value_parser, Arg, Command};
 use env_logger::{self, Env};
 use xpclrs::{
-    io::{process_xcf, read_file, write_table, to_table},
+    io::{process_xcf, read_file, to_table, write_table},
     methods::xpclr,
 };
 
@@ -137,15 +137,25 @@ fn main() {
                     .help("Number of threads to use"),
             )
             .arg(
+                Arg::new("OUTFMT")
+                    .short('f')
+                    .long("format")
+                    .required(false)
+                    .default_value("tsv")
+                    .value_parser([
+                        PossibleValue::new("tsv"),
+                        PossibleValue::new("txt"),
+                        PossibleValue::new("csv"),
+                    ])
+                    .help("Format to save the output (csv, tsv, txt)"),
+            )
+            .arg(
                 Arg::new("LOG")
                     .short('l')
                     .long("log")
                     .required(false)
                     .default_value("info")
-                    .value_parser([
-                        PossibleValue::new("info"),
-                        PossibleValue::new("debug"),
-                    ])
+                    .value_parser([PossibleValue::new("info"), PossibleValue::new("debug")])
                     .help("Number of threads to use"),
             )
             .get_matches();
@@ -184,6 +194,10 @@ fn main() {
     let out_path = matches
         .get_one::<String>("OUT")
         .expect("Output file is required");
+    let out_fmt = matches
+        .get_one::<String>("OUTFMT")
+        .expect("Invalid output format")
+        .to_owned();
     let n_threads = matches
         .get_one::<usize>("NTHREADS")
         .expect("Number of threads invalid");
@@ -242,13 +256,13 @@ fn main() {
             (positions, gdistances, windows),
             (ldcutoff, phased),
             (maxsnps as usize, minsnps as usize),
-        ).expect("Failed running the XP-CLR function");
+        )
+        .expect("Failed running the XP-CLR function");
         // Write output
         log::info!("Writing output file to {out_path}...");
         let mut xpclr_tsv = write_table(&format!("{out_path}.{}", &chrom));
-        let _ = to_table(&chrom, xpclr_res, &mut xpclr_tsv);
+        let _ = to_table(&chrom, xpclr_res, &mut xpclr_tsv, &out_fmt);
     });
-
 
     log::info!("XPCLR computation completed.")
 }
