@@ -109,7 +109,7 @@ pub fn est_omega(q1: &[f64], q2: &[f64]) -> Result<f64> {
 
 // Measure variability for each SNP
 pub fn var_estimate(w: f64, q2: f64) -> Result<f64> {
-    log::debug!("{w} {q2} {} {} {}", 1.0_f64 - q2, q2 * (1.0_f64 - q2), w * (q2 * (1.0_f64 - q2)));
+    log::debug!("var_estimate {w} {q2} {} {} {}", 1.0_f64 - q2, q2 * (1.0_f64 - q2), w * (q2 * (1.0_f64 - q2)));
     Ok(w * (q2 * (1.0_f64 - q2)))
 }
 
@@ -162,37 +162,16 @@ fn pdf_scalar(p1: f64, c: f64, p2: f64, var: f64) -> f64 {
     r
 }
 
-/// Stable binomial pmf: pmf(x | n, p) with 0<=x<=n
-fn binom_pmf(x: u64, n: u64, p: f64) -> f64 {
-    use statrs::function::gamma::ln_gamma;
-
-    if p <= 0.0 {
-        return if x == 0 { 1.0 } else { 0.0 };
-    }
-    if p >= 1.0 {
-        return if x == n { 1.0 } else { 0.0 };
-    }
-
-    let x = x as f64;
-    let n = n as f64;
-
-    // log C(n, x) via log-gamma
-    let ln_choose = ln_gamma(n + 1.0) - ln_gamma(x + 1.0) - ln_gamma(n - x + 1.0);
-    let ln_pmf = ln_choose + x * p.ln() + (n - x) * (1.0 - p).ln();
-    ln_pmf.exp()
-}
-
 /// pdf_integral(p1) = pdf(p1) * BinomPMF(xj | nj, p1)
 fn pdf_integral_scalar(p1: f64, xj: u64, nj: u64, c: f64, p2: f64, var: f64) -> f64 {
     let dens = pdf_scalar(p1, c, p2, var);
     let binom = Binomial::new(p1, nj).expect("Cannot generate binomial distr.");
     let pmf = binom.pmf(xj);
-    // let pmf = binom_pmf(xj, nj, p1);
     dens * pmf
 }
 
 /// Numerically integrate f over [a, b] using GSL QAGS with relative tolerance.
-fn integrate_qags<F>(f: F, a: f64, b: f64, epsabs: f64, epsrel: f64) -> (f64, f64)
+fn _integrate_qags<F>(f: F, a: f64, b: f64, epsabs: f64, epsrel: f64) -> (f64, f64)
 where
     F: Fn(f64) -> f64,
 {
@@ -207,7 +186,7 @@ where
     (result.value, result.abs_error)
 }
 
-fn integrate_qags_gsl<F>(f: F, a: f64, b: f64, epsabs: f64, epsrel: f64, limit: usize) -> (f64, f64)
+fn _integrate_qags_gsl<F>(f: F, a: f64, b: f64, epsabs: f64, epsrel: f64, limit: usize) -> (f64, f64)
 where
     F: Fn(f64) -> f64,
 {
@@ -221,10 +200,10 @@ where
 }
 
 fn integrate_qagp_gsl<F>(
-    mut f: F,
+    f: F,
     a: f64,
     b: f64,
-    interior_points: &mut [f64], // known breakpoints (excluding endpoints)
+    interior_points: &[f64], // known breakpoints (excluding endpoints)
     epsabs: f64,
     epsrel: f64,
     limit: usize,
@@ -248,6 +227,36 @@ where
     (res, err)
 }
 
+fn _compute_chen_likelihood_scirs2(xj: u64, nj: u64, c: f64, p2: f64, var: f64) -> Result<f64> {
+    // Integral bounds and tolerances matching SciPy quad
+    let a = 0.001;
+    let b = 0.999;
+    let epsabs = 1e-9;
+    let epsrel = 0.001;
+    log::debug!("compute_chen_likelihood_scirs2 xj: {xj}, nj: {nj}, c: {c}, p2: {p2}, var: {var}");
+
+    // i_likl = ∫ pdf_integral dp1
+    let (like_i, _err_i) = _integrate_qags(
+        |p1| pdf_integral_scalar(p1, xj, nj, c, p2, var),
+        a, b, epsabs, epsrel,
+    );
+
+    // i_base = ∫ pdf dp1
+    let (like_b, _err_b) = _integrate_qags(
+        |p1| pdf_scalar(p1, c, p2, var),
+        a, b, epsabs, epsrel,
+    );
+
+    // Return the right value
+    let ratio = if like_i > 0.0 && like_b > 0.0 {
+        (like_i.ln()) - (like_b.ln())
+    } else {
+        -1800_f64
+    };
+    log::debug!("compute_chen_likelihood_scirs2 {like_i} {like_b} {_err_i} {_err_b} {} {} {ratio}", like_i.ln(), like_b.ln());
+    Ok(ratio)
+}
+
 fn compute_chen_likelihood(xj: u64, nj: u64, c: f64, p2: f64, var: f64) -> Result<f64> {
     // Integral bounds and tolerances matching SciPy quad
     let a = 0.001;
@@ -255,17 +264,17 @@ fn compute_chen_likelihood(xj: u64, nj: u64, c: f64, p2: f64, var: f64) -> Resul
     let epsabs = 1e-9;
     let epsrel = 0.001;
     let limit = 50; // number of subintervals (QUADPACK-style, like SciPy)
-    log::debug!("xj: {xj}, nj: {nj}, c: {c}, p2: {p2}, var: {var}");
+    log::debug!("compute_chen_likelihood xj: {xj}, nj: {nj}, c: {c}, p2: {p2}, var: {var}");
 
     // Recommended: use QAGP with breakpoints at c and 1-c
-    let mut breaks = [c, 1.0 - c];
+    let breaks = [c, 1.0 - c];
 
     // Integral with binomial factor
     let (like_i, _err_i) = integrate_qagp_gsl(
         |p1| pdf_integral_scalar(p1, xj, nj, c, p2, var),
         a,
         b,
-        &mut breaks,
+        &breaks,
         epsabs,
         epsrel,
         limit,
@@ -276,23 +285,11 @@ fn compute_chen_likelihood(xj: u64, nj: u64, c: f64, p2: f64, var: f64) -> Resul
         |p1| pdf_scalar(p1, c, p2, var),
         a,
         b,
-        &mut breaks,
+        &breaks,
         epsabs,
         epsrel,
         limit,
     );
-
-    // // i_likl = ∫ pdf_integral dp1
-    // let (like_i, _err1) = integrate_qags(
-    //     |p1| pdf_integral_scalar(p1, xj, nj, c, p2, var),
-    //     a, b, epsabs, epsrel,
-    // );
-
-    // // i_base = ∫ pdf dp1
-    // let (like_b, _err2) = integrate_qags(
-    //     |p1| pdf_scalar(p1, c, p2, var),
-    //     a, b, epsabs, epsrel,
-    // );
 
     // Return the right value
     let ratio = if like_i > 0.0 && like_b > 0.0 {
@@ -300,19 +297,19 @@ fn compute_chen_likelihood(xj: u64, nj: u64, c: f64, p2: f64, var: f64) -> Resul
     } else {
         -1800_f64
     };
-    // log::debug!("{like_i} {like_b} {_err_i} {_err_b} {} {} {ratio}", like_i.ln(), like_b.ln());
+    log::debug!("compute_chen_likelihood: {like_i} {like_b} {_err_i} {_err_b} {} {} {ratio}", like_i.ln(), like_b.ln());
     Ok(ratio)
 }
 
-fn compute_chen_likelihood_qags(xj: u64, nj: u64, c: f64, p2: f64, var: f64) -> Result<f64> {
-    log::debug!("xj: {xj}, nj: {nj}, c: {c}, p2: {p2}, var: {var}");
+fn _compute_chen_likelihood_qags(xj: u64, nj: u64, c: f64, p2: f64, var: f64) -> Result<f64> {
+    log::debug!("compute_chen_likelihood_qags xj: {xj}, nj: {nj}, c: {c}, p2: {p2}, var: {var}");
     let a = 0.001;
     let b = 0.999;
     let epsabs = 0.0;
     let epsrel = 1e-3;
     let limit = 50;
 
-    let (like_i, err_i) = integrate_qags_gsl(
+    let (like_i, err_i) = _integrate_qags_gsl(
         |p1| pdf_integral_scalar(p1, xj, nj, c, p2, var),
         a,
         b,
@@ -321,18 +318,18 @@ fn compute_chen_likelihood_qags(xj: u64, nj: u64, c: f64, p2: f64, var: f64) -> 
         limit,
     );
     let (like_b, err_b) =
-        integrate_qags_gsl(|p1| pdf_scalar(p1, c, p2, var), a, b, epsabs, epsrel, limit);
+        _integrate_qags_gsl(|p1| pdf_scalar(p1, c, p2, var), a, b, epsabs, epsrel, limit);
 
     let ratio = if like_i > 0.0 && like_b > 0.0 {
         like_i.ln() - like_b.ln()
     } else {
         -1800.0
     };
-    // log::debug!(
-    //     "{like_i} {like_b} {err_i} {err_b} {} {} {ratio}",
-    //     like_i.ln(),
-    //     like_b.ln()
-    // );
+    log::debug!(
+        "compute_chen_likelihood_qags {like_i} {like_b} {err_i} {err_b} {} {} {ratio}",
+        like_i.ln(),
+        like_b.ln()
+    );
     Ok(ratio)
 }
 
@@ -365,7 +362,7 @@ fn compute_complikelihood(
             })
             .collect::<Vec<f64>>();
         // final value
-        log::debug!("{marginall:?}");
+        log::debug!("compute_complikelihood {marginall:?}");
         let ml: f64 = marginall.iter().sum();
         Ok(-ml)
     }
@@ -397,7 +394,7 @@ fn compute_xpclr(
         if counter == 0 {
             null_model_li = ll;
         }
-        log::debug!("{counter} {sc} {ll}");
+        log::debug!("compute_xpclr {counter} {sc} {ll}");
         // Replace values
         if ll < maximum_li {
             maximum_li = ll;
@@ -406,7 +403,7 @@ fn compute_xpclr(
             break;
         }
     }
-    log::debug!("{maximum_li} {null_model_li} {maxli_sc}\n\n");
+    log::debug!("compute_xpclr {maximum_li} {null_model_li} {maxli_sc}\n\n");
     Ok((-maximum_li, -null_model_li, maxli_sc))
 }
 
@@ -702,7 +699,7 @@ pub fn xpclr(
             let (ix, n_avail) = get_window(&bpositions, *start, *stop, maxsnps).expect("Cannot find the window");
             let n_snps = ix.len();
             let max_ix = ix.iter().last().unwrap_or(&0_usize).to_owned();
-            log::debug!("Window idx: {n}; Window BP interval: {start}-{stop}; N SNPs selected: {n_snps}; N SNP available: {n_avail}");
+            log::debug!("xpclr Window idx: {n}; Window BP interval: {start}-{stop}; N SNPs selected: {n_snps}; N SNP available: {n_avail}");
             if n_snps < minsnps {
                 let xpclr_vals = (f64::NAN, f64::NAN, f64::NAN, f64::NAN);
                 (n, (*start, *stop, *start, *stop, n_snps, n_avail), xpclr_vals)
@@ -719,7 +716,7 @@ pub fn xpclr(
                 let weights = compute_weights(gt_range, ar_range, ldcutoff, isphased).expect("Failed to compute the weights");
                 let omegas = vec![w; rds.len()];
                 // Compute XP-CLR
-                log::debug!("{start} {stop} {} {p2freqs:?}", rds.len());
+                log::debug!("xpclr {start} {stop} {} {p2freqs:?}", rds.len());
                 let xpclr_res = compute_xpclr(
                     (&a1_range, &t1_range),
                     &rds,
