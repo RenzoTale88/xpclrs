@@ -3,6 +3,7 @@ This module provides the functions required to compute the XP-CLR.
 */
 use anyhow::Result;
 use counter::Counter;
+use quad::{constants::FnVec, integrate};
 use itertools::Itertools;
 use rand::prelude::IndexedRandom;
 use rayon::prelude::*;
@@ -12,6 +13,7 @@ use scirs2_integrate::quad::{quad, QuadOptions};
 use statistical::mean;
 use statrs::distribution::{Binomial, Discrete};
 use std::f64::consts::PI;
+use std::sync::Arc;
 
 // Drafted bisect left and right
 pub struct Bisector<'a, T> {
@@ -171,8 +173,28 @@ fn pdf_scalar(p1: f64, c: f64, p2: f64, var: f64) -> f64 {
 fn pdf_integral_scalar(p1: f64, xj: u64, nj: u64, c: f64, p2: f64, var: f64) -> f64 {
     let dens = pdf_scalar(p1, c, p2, var);
     let binom = Binomial::new(p1, nj).expect("Cannot generate binomial distr.");
-    let pmf = binom.pmf(xj);
+    // let pmf = binom.pmf(xj);
+    let logpmf = binom.ln_pmf((xj as i64).try_into().unwrap());
+    let pmf = logpmf.exp();
     dens * pmf
+}
+
+/// Numerically integrate f over [a, b] using GSL QAGS with relative tolerance.
+fn _integrate_quad<F>(f: F, a: f64, b: f64, epsabs: f64, epsrel: f64) -> (f64, f64)
+{
+    let result = integrate(
+        f,
+        a,
+        b,
+        epsabs,
+        epsrel,
+        2,
+        50,
+        vec![0.0],
+        1,
+        false
+    ).expect("Cannot integrate with quad");
+    (result.result, result.abserr)
 }
 
 /// Numerically integrate f over [a, b] using GSL QAGS with relative tolerance.
@@ -183,9 +205,9 @@ where
     let options = QuadOptions {
         abs_tol: epsabs,
         rel_tol: epsrel,
-        max_evals: 50,
-        use_abs_error: false,
-        use_simpson: true,
+        max_evals: 10_000,
+        use_abs_error: true,
+        use_simpson: false,
     };
     let result = quad(|x: f64| f(x), a, b, Some(options)).expect("Failed to compute the integral.");
     (result.value, result.abs_error)
@@ -211,7 +233,7 @@ where
     (res, err)
 }
 
-fn integrate_qagp_gsl<F>(
+fn _integrate_qagp_gsl<F>(
     f: F,
     a: f64,
     b: f64,
@@ -239,11 +261,50 @@ where
     (res, err)
 }
 
+fn _compute_chen_likelihood_quad(xj: u64, nj: u64, c: f64, p2: f64, var: f64) -> Result<f64> {
+    // Integral bounds and tolerances matching SciPy quad
+    let a = 0.001;
+    let b = 0.999;
+    let epsabs = 0.0;
+    let epsrel = 0.001;
+    log::debug!("compute_chen_likelihood_scirs2 xj: {xj}, nj: {nj}, c: {c}, p2: {p2}, var: {var}");
+
+    // Prepare FnVec
+    let f = FnVec {
+        components: Arc::new(|p1| pdf_integral_scalar(p1, xj, nj, c, p2, var)),
+    };
+
+    // i_likl = ∫ pdf_integral dp1
+    let (like_i, _err_i) = _integrate_quad(
+        &f,
+        a,
+        b,
+        epsabs,
+        epsrel,
+    );
+
+    // i_base = ∫ pdf dp1
+    let (like_b, _err_b) = _integrate_quad(|p1| pdf_scalar(p1, c, p2, var), a, b, epsabs, epsrel);
+
+    // Return the right value
+    let ratio = if like_i > 0.0 && like_b > 0.0 {
+        (like_i.ln()) - (like_b.ln())
+    } else {
+        -1800_f64
+    };
+    log::debug!(
+        "compute_chen_likelihood_scirs2 {like_i} {like_b} {_err_i} {_err_b} {} {} {ratio}",
+        like_i.ln(),
+        like_b.ln()
+    );
+    Ok(ratio)
+}
+
 fn _compute_chen_likelihood_scirs2(xj: u64, nj: u64, c: f64, p2: f64, var: f64) -> Result<f64> {
     // Integral bounds and tolerances matching SciPy quad
     let a = 0.001;
     let b = 0.999;
-    let epsabs = 1e-9;
+    let epsabs = 0.0;
     let epsrel = 0.001;
     log::debug!("compute_chen_likelihood_scirs2 xj: {xj}, nj: {nj}, c: {c}, p2: {p2}, var: {var}");
 
@@ -273,20 +334,20 @@ fn _compute_chen_likelihood_scirs2(xj: u64, nj: u64, c: f64, p2: f64, var: f64) 
     Ok(ratio)
 }
 
-fn compute_chen_likelihood(xj: u64, nj: u64, c: f64, p2: f64, var: f64) -> Result<f64> {
+fn _compute_chen_likelihood_qagp(xj: u64, nj: u64, c: f64, p2: f64, var: f64) -> Result<f64> {
     // Integral bounds and tolerances matching SciPy quad
     let a = 0.001;
     let b = 0.999;
     let epsabs = 1e-9;
     let epsrel = 0.001;
     let limit = 50; // number of subintervals (QUADPACK-style, like SciPy)
-    log::debug!("compute_chen_likelihood xj: {xj}, nj: {nj}, c: {c}, p2: {p2}, var: {var}");
+    // println!("compute_chen_likelihood xj: {xj}, nj: {nj}, c: {c}, p2: {p2}, var: {var}");
 
     // Recommended: use QAGP with breakpoints at c and 1-c
     let breaks = [c, 1.0 - c];
 
     // Integral with binomial factor
-    let (like_i, _err_i) = integrate_qagp_gsl(
+    let (like_i, _err_i) = _integrate_qagp_gsl(
         |p1| pdf_integral_scalar(p1, xj, nj, c, p2, var),
         a,
         b,
@@ -297,7 +358,7 @@ fn compute_chen_likelihood(xj: u64, nj: u64, c: f64, p2: f64, var: f64) -> Resul
     );
 
     // Base integral of the pdf (denominator)
-    let (like_b, _err_b) = integrate_qagp_gsl(
+    let (like_b, _err_b) = _integrate_qagp_gsl(
         |p1| pdf_scalar(p1, c, p2, var),
         a,
         b,
@@ -313,11 +374,11 @@ fn compute_chen_likelihood(xj: u64, nj: u64, c: f64, p2: f64, var: f64) -> Resul
     } else {
         -1800_f64
     };
-    log::debug!(
-        "compute_chen_likelihood: {like_i} {like_b} {_err_i} {_err_b} {} {} {ratio}",
-        like_i.ln(),
-        like_b.ln()
-    );
+    // println!(
+    //     "compute_chen_likelihood: {like_i} {like_b} {_err_i} {_err_b} {} {} {ratio}",
+    //     like_i.ln(),
+    //     like_b.ln()
+    // );
     Ok(ratio)
 }
 
@@ -325,7 +386,7 @@ fn _compute_chen_likelihood_qags(xj: u64, nj: u64, c: f64, p2: f64, var: f64) ->
     log::debug!("compute_chen_likelihood_qags xj: {xj}, nj: {nj}, c: {c}, p2: {p2}, var: {var}");
     let a = 0.001;
     let b = 0.999;
-    let epsabs = 0.0;
+    let epsabs = 1e-9;
     let epsrel = 1e-3;
     let limit = 50;
 
@@ -375,15 +436,15 @@ fn compute_complikelihood(
                 // Compute C
                 let c = compute_c(*r, sc, None, None, Some(5_u32)).expect("Cannot compute C");
                 // Compute likelihood
-                let cl = compute_chen_likelihood(*xj, *nj, c, *p2, var)
+                let cl = _compute_chen_likelihood_scirs2(*xj, *nj, c, *p2, var)
                     .expect("Cannot compute the likelihood");
                 // Return the weighted margin
                 cl * *weight
             })
             .collect::<Vec<f64>>();
         // final value
-        log::debug!("compute_complikelihood {marginall:?}");
         let ml: f64 = marginall.iter().sum();
+        println!("compute_complikelihood sc={sc} marginall={marginall:?} ml={ml}");
         Ok(-ml)
     }
 }
