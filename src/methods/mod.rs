@@ -109,7 +109,12 @@ pub fn est_omega(q1: &[f64], q2: &[f64]) -> Result<f64> {
 
 // Measure variability for each SNP
 pub fn var_estimate(w: f64, q2: f64) -> Result<f64> {
-    log::debug!("var_estimate {w} {q2} {} {} {}", 1.0_f64 - q2, q2 * (1.0_f64 - q2), w * (q2 * (1.0_f64 - q2)));
+    log::debug!(
+        "var_estimate {w} {q2} {} {} {}",
+        1.0_f64 - q2,
+        q2 * (1.0_f64 - q2),
+        w * (q2 * (1.0_f64 - q2))
+    );
     Ok(w * (q2 * (1.0_f64 - q2)))
 }
 
@@ -186,7 +191,14 @@ where
     (result.value, result.abs_error)
 }
 
-fn _integrate_qags_gsl<F>(f: F, a: f64, b: f64, epsabs: f64, epsrel: f64, limit: usize) -> (f64, f64)
+fn _integrate_qags_gsl<F>(
+    f: F,
+    a: f64,
+    b: f64,
+    epsabs: f64,
+    epsrel: f64,
+    limit: usize,
+) -> (f64, f64)
 where
     F: Fn(f64) -> f64,
 {
@@ -238,14 +250,14 @@ fn _compute_chen_likelihood_scirs2(xj: u64, nj: u64, c: f64, p2: f64, var: f64) 
     // i_likl = ∫ pdf_integral dp1
     let (like_i, _err_i) = _integrate_qags(
         |p1| pdf_integral_scalar(p1, xj, nj, c, p2, var),
-        a, b, epsabs, epsrel,
+        a,
+        b,
+        epsabs,
+        epsrel,
     );
 
     // i_base = ∫ pdf dp1
-    let (like_b, _err_b) = _integrate_qags(
-        |p1| pdf_scalar(p1, c, p2, var),
-        a, b, epsabs, epsrel,
-    );
+    let (like_b, _err_b) = _integrate_qags(|p1| pdf_scalar(p1, c, p2, var), a, b, epsabs, epsrel);
 
     // Return the right value
     let ratio = if like_i > 0.0 && like_b > 0.0 {
@@ -253,7 +265,11 @@ fn _compute_chen_likelihood_scirs2(xj: u64, nj: u64, c: f64, p2: f64, var: f64) 
     } else {
         -1800_f64
     };
-    log::debug!("compute_chen_likelihood_scirs2 {like_i} {like_b} {_err_i} {_err_b} {} {} {ratio}", like_i.ln(), like_b.ln());
+    log::debug!(
+        "compute_chen_likelihood_scirs2 {like_i} {like_b} {_err_i} {_err_b} {} {} {ratio}",
+        like_i.ln(),
+        like_b.ln()
+    );
     Ok(ratio)
 }
 
@@ -297,7 +313,11 @@ fn compute_chen_likelihood(xj: u64, nj: u64, c: f64, p2: f64, var: f64) -> Resul
     } else {
         -1800_f64
     };
-    log::debug!("compute_chen_likelihood: {like_i} {like_b} {_err_i} {_err_b} {} {} {ratio}", like_i.ln(), like_b.ln());
+    log::debug!(
+        "compute_chen_likelihood: {like_i} {like_b} {_err_i} {_err_b} {} {} {ratio}",
+        like_i.ln(),
+        like_b.ln()
+    );
     Ok(ratio)
 }
 
