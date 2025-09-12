@@ -3,7 +3,6 @@ This module provides the functions required to compute the XP-CLR.
 */
 use anyhow::Result;
 use counter::Counter;
-use quad::{constants::FnVec, integrate};
 use itertools::Itertools;
 use rand::prelude::IndexedRandom;
 use rayon::prelude::*;
@@ -13,7 +12,6 @@ use scirs2_integrate::quad::{quad, QuadOptions};
 use statistical::mean;
 use statrs::distribution::{Binomial, Discrete};
 use std::f64::consts::PI;
-use std::sync::Arc;
 
 // Drafted bisect left and right
 pub struct Bisector<'a, T> {
@@ -180,24 +178,6 @@ fn pdf_integral_scalar(p1: f64, xj: u64, nj: u64, c: f64, p2: f64, var: f64) -> 
 }
 
 /// Numerically integrate f over [a, b] using GSL QAGS with relative tolerance.
-fn _integrate_quad<F>(f: F, a: f64, b: f64, epsabs: f64, epsrel: f64) -> (f64, f64)
-{
-    let result = integrate(
-        f,
-        a,
-        b,
-        epsabs,
-        epsrel,
-        2,
-        50,
-        vec![0.0],
-        1,
-        false
-    ).expect("Cannot integrate with quad");
-    (result.result, result.abserr)
-}
-
-/// Numerically integrate f over [a, b] using GSL QAGS with relative tolerance.
 fn _integrate_qags<F>(f: F, a: f64, b: f64, epsabs: f64, epsrel: f64) -> (f64, f64)
 where
     F: Fn(f64) -> f64,
@@ -205,9 +185,9 @@ where
     let options = QuadOptions {
         abs_tol: epsabs,
         rel_tol: epsrel,
-        max_evals: 10_000,
+        max_evals: 100_000,
         use_abs_error: true,
-        use_simpson: false,
+        use_simpson: true,
     };
     let result = quad(|x: f64| f(x), a, b, Some(options)).expect("Failed to compute the integral.");
     (result.value, result.abs_error)
@@ -225,7 +205,7 @@ where
     F: Fn(f64) -> f64,
 {
     // QAGS: adaptive Gauss–Kronrod with singularity handling
-    let mut w = IntegrationWorkspace::new(limit).expect("GSL workspace alloc failed");
+    let mut w = IntegrationWorkspace::new(10_000).expect("GSL workspace alloc failed");
     let func = |x: f64| f(x);
     let (res, err) = w
         .qags(func, a, b, epsabs, epsrel, limit)
@@ -259,45 +239,6 @@ where
         .qagp(func, &mut pts, epsabs, epsrel, limit)
         .expect("GSL qagp failed");
     (res, err)
-}
-
-fn _compute_chen_likelihood_quad(xj: u64, nj: u64, c: f64, p2: f64, var: f64) -> Result<f64> {
-    // Integral bounds and tolerances matching SciPy quad
-    let a = 0.001;
-    let b = 0.999;
-    let epsabs = 0.0;
-    let epsrel = 0.001;
-    log::debug!("compute_chen_likelihood_scirs2 xj: {xj}, nj: {nj}, c: {c}, p2: {p2}, var: {var}");
-
-    // Prepare FnVec
-    let f = FnVec {
-        components: Arc::new(|p1| pdf_integral_scalar(p1, xj, nj, c, p2, var)),
-    };
-
-    // i_likl = ∫ pdf_integral dp1
-    let (like_i, _err_i) = _integrate_quad(
-        &f,
-        a,
-        b,
-        epsabs,
-        epsrel,
-    );
-
-    // i_base = ∫ pdf dp1
-    let (like_b, _err_b) = _integrate_quad(|p1| pdf_scalar(p1, c, p2, var), a, b, epsabs, epsrel);
-
-    // Return the right value
-    let ratio = if like_i > 0.0 && like_b > 0.0 {
-        (like_i.ln()) - (like_b.ln())
-    } else {
-        -1800_f64
-    };
-    log::debug!(
-        "compute_chen_likelihood_scirs2 {like_i} {like_b} {_err_i} {_err_b} {} {} {ratio}",
-        like_i.ln(),
-        like_b.ln()
-    );
-    Ok(ratio)
 }
 
 fn _compute_chen_likelihood_scirs2(xj: u64, nj: u64, c: f64, p2: f64, var: f64) -> Result<f64> {
@@ -338,8 +279,9 @@ fn _compute_chen_likelihood_qagp(xj: u64, nj: u64, c: f64, p2: f64, var: f64) ->
     // Integral bounds and tolerances matching SciPy quad
     let a = 0.001;
     let b = 0.999;
-    let epsabs = 1e-9;
-    let epsrel = 0.001;
+    // Use practical SciPy-like settings used in the Python implementation
+    let epsabs = 0.0;      // SciPy default
+    let epsrel = 1e-3;     // Matches xpclr tolerance used elsewhere
     let limit = 50; // number of subintervals (QUADPACK-style, like SciPy)
     // println!("compute_chen_likelihood xj: {xj}, nj: {nj}, c: {c}, p2: {p2}, var: {var}");
 
@@ -370,9 +312,9 @@ fn _compute_chen_likelihood_qagp(xj: u64, nj: u64, c: f64, p2: f64, var: f64) ->
 
     // Return the right value
     let ratio = if like_i > 0.0 && like_b > 0.0 {
-        (like_i.ln()) - (like_b.ln())
+        like_i.ln() - like_b.ln()
     } else {
-        -1800_f64
+        -1800.0
     };
     // println!(
     //     "compute_chen_likelihood: {like_i} {like_b} {_err_i} {_err_b} {} {} {ratio}",
@@ -436,7 +378,8 @@ fn compute_complikelihood(
                 // Compute C
                 let c = compute_c(*r, sc, None, None, Some(5_u32)).expect("Cannot compute C");
                 // Compute likelihood
-                let cl = _compute_chen_likelihood_scirs2(*xj, *nj, c, *p2, var)
+                // Use GSL QAGP with breakpoints to mirror SciPy's quad behavior
+                let cl = _compute_chen_likelihood_qagp(*xj, *nj, c, *p2, var)
                     .expect("Cannot compute the likelihood");
                 // Return the weighted margin
                 cl * *weight
@@ -480,8 +423,6 @@ fn compute_xpclr(
         if ll < maximum_li {
             maximum_li = ll;
             maxli_sc = *sc;
-        } else {
-            break;
         }
     }
     log::debug!("compute_xpclr {maximum_li} {null_model_li} {maxli_sc}\n\n");
@@ -791,7 +732,7 @@ pub fn xpclr(
                 let (gt_range, ar_range, gd_range, a1_range, t1_range, p2freqs): (Vec<&Vec<Genotype>>, Vec<u32>, Vec<f64>, Vec<u64>, Vec<u64>, Vec<f64>) = Itertools::multiunzip(ix.iter().map(|&i| (&gt2[i], &ar[i], &geneticd[i], &a1[i], &t1[i], &q2[i])));
                 // Compute distances from the average gen. dist.
                 let mdist = mean(&gd_range);
-                let rds = gd_range.iter().map(|d| d - mdist ).collect::<Vec<f64>>();
+                let rds = gd_range.iter().map(|d| (d - mdist).abs()).collect::<Vec<f64>>();
 
                 // Compute the weights
                 let weights = compute_weights(gt_range, ar_range, ldcutoff, isphased).expect("Failed to compute the weights");

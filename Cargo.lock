@@ -1223,15 +1223,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "quad"
-version = "0.1.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "75c07c26bb2f7c805f299693ad55eb70445ad72911a7062766f0576f39e704ef"
-dependencies = [
- "rayon",
-]
-
-[[package]]
 name = "quad-rs"
 version = "0.2.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2279,7 +2270,6 @@ dependencies = [
  "itertools 0.14.0",
  "log",
  "niffler",
- "quad",
  "quad-rs",
  "rand 0.9.2",
  "rayon",
