@@ -177,26 +177,11 @@ fn pdf_integral_scalar(p1: f64, xj: u64, nj: u64, c: f64, p2: f64, var: f64) -> 
     dens * pmf
 }
 
-/// Numerically integrate f over [a, b] using GSL QAGS with relative tolerance.
-fn _integrate_qags<F>(f: F, a: f64, b: f64, epsabs: f64, epsrel: f64) -> (f64, f64)
-where
-    F: Fn(f64) -> f64,
-{
-    let options = QuadOptions {
-        abs_tol: epsabs,
-        rel_tol: epsrel,
-        max_evals: 100_000,
-        use_abs_error: true,
-        use_simpson: true,
-    };
-    let result = quad(|x: f64| f(x), a, b, Some(options)).expect("Failed to compute the integral.");
-    (result.value, result.abs_error)
-}
-
 fn _integrate_qags_gsl<F>(
     f: F,
     a: f64,
     b: f64,
+    _interior_points: &[f64], // known breakpoints (excluding endpoints)
     epsabs: f64,
     epsrel: f64,
     limit: usize,
@@ -241,41 +226,14 @@ where
     (res, err)
 }
 
-fn _compute_chen_likelihood_scirs2(xj: u64, nj: u64, c: f64, p2: f64, var: f64) -> Result<f64> {
-    // Integral bounds and tolerances matching SciPy quad
-    let a = 0.001;
-    let b = 0.999;
-    let epsabs = 0.0;
-    let epsrel = 0.001;
-    log::debug!("compute_chen_likelihood_scirs2 xj: {xj}, nj: {nj}, c: {c}, p2: {p2}, var: {var}");
-
-    // i_likl = ∫ pdf_integral dp1
-    let (like_i, _err_i) = _integrate_qags(
-        |p1| pdf_integral_scalar(p1, xj, nj, c, p2, var),
-        a,
-        b,
-        epsabs,
-        epsrel,
-    );
-
-    // i_base = ∫ pdf dp1
-    let (like_b, _err_b) = _integrate_qags(|p1| pdf_scalar(p1, c, p2, var), a, b, epsabs, epsrel);
-
-    // Return the right value
-    let ratio = if like_i > 0.0 && like_b > 0.0 {
-        (like_i.ln()) - (like_b.ln())
-    } else {
-        -1800_f64
-    };
-    log::debug!(
-        "compute_chen_likelihood_scirs2 {like_i} {like_b} {_err_i} {_err_b} {} {} {ratio}",
-        like_i.ln(),
-        like_b.ln()
-    );
-    Ok(ratio)
-}
-
-fn _compute_chen_likelihood_qagp(xj: u64, nj: u64, c: f64, p2: f64, var: f64) -> Result<f64> {
+fn _compute_chen_likelihood(
+    xj: u64,
+    nj: u64,
+    c: f64,
+    p2: f64,
+    var: f64,
+    mode: Option<&str>,
+) -> Result<f64> {
     // Integral bounds and tolerances matching SciPy quad
     let a = 0.001;
     let b = 0.999;
@@ -289,15 +247,35 @@ fn _compute_chen_likelihood_qagp(xj: u64, nj: u64, c: f64, p2: f64, var: f64) ->
     let breaks = [c, 1.0 - c];
 
     // Integral with binomial factor
-    let (like_i, _err_i) = _integrate_qagp_gsl(
-        |p1| pdf_integral_scalar(p1, xj, nj, c, p2, var),
-        a,
-        b,
-        &breaks,
-        epsabs,
-        epsrel,
-        limit,
-    );
+    let (like_i, _err_i) = match mode {
+        Some("qagp") =>  _integrate_qagp_gsl(
+            |p1| pdf_integral_scalar(p1, xj, nj, c, p2, var),
+            a,
+            b,
+            &breaks,
+            epsabs,
+            epsrel,
+            limit,
+        ),
+        Some("qags") => _integrate_qags_gsl(
+            |p1| pdf_integral_scalar(p1, xj, nj, c, p2, var),
+            a,
+            b,
+            &breaks,
+            epsabs,
+            epsrel,
+            limit,
+        ),
+        _ =>  _integrate_qagp_gsl(
+            |p1| pdf_integral_scalar(p1, xj, nj, c, p2, var),
+            a,
+            b,
+            &breaks,
+            epsabs,
+            epsrel,
+            limit,
+        ),
+    };
 
     // Base integral of the pdf (denominator)
     let (like_b, _err_b) = _integrate_qagp_gsl(
@@ -324,38 +302,6 @@ fn _compute_chen_likelihood_qagp(xj: u64, nj: u64, c: f64, p2: f64, var: f64) ->
     Ok(ratio)
 }
 
-fn _compute_chen_likelihood_qags(xj: u64, nj: u64, c: f64, p2: f64, var: f64) -> Result<f64> {
-    log::debug!("compute_chen_likelihood_qags xj: {xj}, nj: {nj}, c: {c}, p2: {p2}, var: {var}");
-    let a = 0.001;
-    let b = 0.999;
-    let epsabs = 1e-9;
-    let epsrel = 1e-3;
-    let limit = 50;
-
-    let (like_i, err_i) = _integrate_qags_gsl(
-        |p1| pdf_integral_scalar(p1, xj, nj, c, p2, var),
-        a,
-        b,
-        epsabs,
-        epsrel,
-        limit,
-    );
-    let (like_b, err_b) =
-        _integrate_qags_gsl(|p1| pdf_scalar(p1, c, p2, var), a, b, epsabs, epsrel, limit);
-
-    let ratio = if like_i > 0.0 && like_b > 0.0 {
-        like_i.ln() - like_b.ln()
-    } else {
-        -1800.0
-    };
-    log::debug!(
-        "compute_chen_likelihood_qags {like_i} {like_b} {err_i} {err_b} {} {} {ratio}",
-        like_i.ln(),
-        like_b.ln()
-    );
-    Ok(ratio)
-}
-
 // Compute composite likelihood
 fn compute_complikelihood(
     sc_m: (f64, Option<usize>),
@@ -379,7 +325,7 @@ fn compute_complikelihood(
                 let c = compute_c(*r, sc, None, None, Some(5_u32)).expect("Cannot compute C");
                 // Compute likelihood
                 // Use GSL QAGP with breakpoints to mirror SciPy's quad behavior
-                let cl = _compute_chen_likelihood_qagp(*xj, *nj, c, *p2, var)
+                let cl = _compute_chen_likelihood(*xj, *nj, c, *p2, var, Some("qagp"))
                     .expect("Cannot compute the likelihood");
                 // Return the weighted margin
                 cl * *weight
