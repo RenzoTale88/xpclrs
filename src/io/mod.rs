@@ -97,6 +97,14 @@ fn get_gt_index(full_list: &Vec<&[u8]>, subset: &[String]) -> Result<Vec<usize>>
     Ok(indices)
 }
 
+// Structure of loaded data
+pub struct GenoData {
+    pub positions: Vec<usize>,
+    pub gt1: Vec<Vec<Genotype>>,
+    pub gt2: Vec<Vec<Genotype>>,
+    pub gdistances: Vec<f64>,
+}
+
 // Process indexed XCF file
 fn indexed_xcf(
     xcf_fn: String,
@@ -106,7 +114,7 @@ fn indexed_xcf(
     start: u64,
     end: Option<u64>,
     (rrate, _gdistkey): (Option<f64>, Option<String>),
-) -> Result<(Vec<usize>, Vec<Vec<Genotype>>, Vec<Vec<Genotype>>, Vec<f64>)> {
+) -> Result<GenoData> {
     log::info!("Indexed reader.");
     // Prepare the indexed reader
     let mut reader = IndexedReader::from_path(xcf_fn).expect("Cannot load indexed BCF/VCF file");
@@ -228,7 +236,12 @@ fn indexed_xcf(
     log::info!(" - {monom_gt2} monomorphic in pop B");
     log::info!(" - {miss_gt1} all-missing in pop A");
     log::info!(" - {miss_gt2} all-missing in pop B");
-    Ok((positions, gt1_data, gt2_data, gd_data))
+    Ok(GenoData{
+        positions,
+        gt1: gt1_data,
+        gt2: gt2_data,
+        gdistances: gd_data
+    })
 }
 
 // Process unindexed XCF
@@ -240,7 +253,7 @@ fn readthrough_xcf(
     start: u64,
     end: Option<u64>,
     (rrate, _gdistkey): (Option<f64>, Option<String>),
-) -> Result<(Vec<usize>, Vec<Vec<Genotype>>, Vec<Vec<Genotype>>, Vec<f64>)> {
+) -> Result<GenoData> {
     log::info!("Streamed reader.");
     log::info!("This is substantially slower than the indexed one.");
     log::info!("Consider generating an index for your BCF/VCF file.");
@@ -370,7 +383,12 @@ fn readthrough_xcf(
     log::info!(" - {monom_gt2} monomorphic in pop B");
     log::info!(" - {miss_gt1} all-missing in pop A");
     log::info!(" - {miss_gt2} all-missing in pop B");
-    Ok((positions, gt1_data, gt2_data, gd_data))
+    Ok(GenoData{
+        positions,
+        gt1: gt1_data,
+        gt2: gt2_data,
+        gdistances: gd_data
+    })
 }
 
 // Load the genotypes for the given samples
@@ -382,19 +400,19 @@ pub fn process_xcf(
     start: Option<u64>,
     end: Option<u64>,
     (rrate, _gdistkey): (Option<f64>, Option<String>),
-) -> Result<(Vec<usize>, Vec<Vec<Genotype>>, Vec<Vec<Genotype>>, Vec<f64>)> {
+) -> Result<GenoData> {
     // Process the data depending on the presence of the index
     let start = start.unwrap_or(0);
     // Prepare the input VCF
     let tbi_path = format!("{xcf_fn}.tbi");
     let csi_path = format!("{xcf_fn}.csi");
     let has_index = Path::exists(Path::new(&tbi_path)) || Path::exists(Path::new(&csi_path));
-    let (positions, gt1_data, gt2_data, gd_data) = match has_index {
+    let g_data = match has_index {
         true => indexed_xcf(xcf_fn, s1, s2, chrom, start, end, (rrate, None)),
         false => readthrough_xcf(xcf_fn, s1, s2, chrom, start, end, (rrate, None)),
     }
     .expect("Failed to parse the VCF/BCF file");
-    Ok((positions, gt1_data, gt2_data, gd_data))
+    Ok(g_data)
 }
 
 pub fn write_table(filename: &str) -> Box<dyn Write> {

@@ -221,7 +221,7 @@ fn main() {
         .collect::<Vec<String>>();
 
     // Load VCF file
-    let (positions, gt1, gt2, gdistances) = process_xcf(
+    let g_data = process_xcf(
         xcf_path,
         &samples_a,
         &samples_b,
@@ -235,7 +235,7 @@ fn main() {
     // Establish the windows
     let end = match end {
         Some(v) => v,
-        None => *positions.iter().max().unwrap() as u64,
+        None => *g_data.positions.iter().max().unwrap() as u64,
     };
     let windows = (start.unwrap()..end)
         .step_by(step as usize)
@@ -252,10 +252,12 @@ fn main() {
     // Run XP-CLR
     pool.install(|| {
         let xpclr_res = xpclr(
-            (gt1, gt2),
-            (positions, gdistances, windows),
-            (ldcutoff, phased),
-            (maxsnps as usize, minsnps as usize),
+            g_data,
+            windows,
+            ldcutoff,
+            phased,
+            maxsnps as usize,
+            minsnps as usize,
         )
         .expect("Failed running the XP-CLR function");
         // Write output

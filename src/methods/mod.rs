@@ -11,6 +11,7 @@ use scirs2_integrate::gaussian::gauss_kronrod21;
 use statistical::mean;
 use statrs::distribution::{Binomial, Discrete};
 use std::f64::consts::PI;
+use crate::io::GenoData;
 
 // Drafted bisect left and right
 pub struct Bisector<'a, T> {
@@ -600,10 +601,12 @@ pub struct XPCLRResult {
 
 // Main XP-CLR caller
 pub fn xpclr(
-    (gt1, gt2): (Vec<Vec<Genotype>>, Vec<Vec<Genotype>>), // Genotypes
-    (bpositions, geneticd, windows): (Vec<usize>, Vec<f64>, Vec<(usize, usize)>), // Positions
-    (ldcutoff, phased): (Option<f64>, Option<bool>),      // LD-related
-    (maxsnps, minsnps): (usize, usize),                   // Size/count filters
+    g_data: GenoData,
+    windows: Vec<(usize, usize)>, // Windows
+    ldcutoff: Option<f64>,
+    phased: Option<bool>,      // LD-related
+    maxsnps: usize,
+    minsnps: usize,                   // Size/count filters
 ) -> Result<Vec<(usize, XPCLRResult,)>> {
     let sel_coeffs = vec![
         0.0, 0.00001, 0.00005, 0.0001, 0.0002, 0.0004, 0.0006, 0.0008, 0.001, 0.003, 0.005, 0.01,
@@ -615,7 +618,7 @@ pub fn xpclr(
 
     // Get the allele frequencies first
     let (ar, t1, a1, q1, _t2, _a2, q2) =
-        pair_gt_to_af(&gt1, &gt2).expect("Failed to copmute the AF for pop 1");
+        pair_gt_to_af(&g_data.gt1, &g_data.gt2).expect("Failed to copmute the AF for pop 1");
 
     // Then, let's compute the omega
     let w = est_omega(&q1, &q2).expect("Cannot compute omega");
@@ -627,7 +630,7 @@ pub fn xpclr(
         .par_iter()
         .enumerate()
         .map(|(n, (start, stop))| {
-            let (ix, n_avail) = get_window(&bpositions, *start, *stop, maxsnps).expect("Cannot find the window");
+            let (ix, n_avail) = get_window(&g_data.positions, *start, *stop, maxsnps).expect("Cannot find the window");
             let n_snps = ix.len();
             let max_ix = ix.iter().last().unwrap_or(&0_usize).to_owned();
             log::debug!("xpclr Window idx: {n}; Window BP interval: {start}-{stop}; N SNPs selected: {n_snps}; N SNP available: {n_avail}");
@@ -641,10 +644,10 @@ pub fn xpclr(
                 };
                 (n, xpclr_win_res)
             } else {
-                let bpi = bpositions[ix[0]];
-                let bpe = bpositions[max_ix];
+                let bpi = g_data.positions[ix[0]];
+                let bpe = g_data.positions[max_ix];
                 // Do not clone, just refer to them
-                let (gt_range, ar_range, gd_range, a1_range, t1_range, p2freqs): (Vec<&Vec<Genotype>>, Vec<u32>, Vec<f64>, Vec<u64>, Vec<u64>, Vec<f64>) = Itertools::multiunzip(ix.iter().map(|&i| (&gt2[i], &ar[i], &geneticd[i], &a1[i], &t1[i], &q2[i])));
+                let (gt_range, ar_range, gd_range, a1_range, t1_range, p2freqs): (Vec<&Vec<Genotype>>, Vec<u32>, Vec<f64>, Vec<u64>, Vec<u64>, Vec<f64>) = Itertools::multiunzip(ix.iter().map(|&i| (&g_data.gt2[i], &ar[i], &g_data.gdistances[i], &a1[i], &t1[i], &q2[i])));
                 // Compute distances from the average gen. dist.
                 let mdist = mean(&gd_range);
                 let rds = gd_range.iter().map(|d| (d - mdist).abs()).collect::<Vec<f64>>();
