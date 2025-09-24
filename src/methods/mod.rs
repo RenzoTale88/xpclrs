@@ -207,7 +207,6 @@ fn _integrate_qags_scirs2<F>(
     f: F,
     a: f64,
     b: f64,
-    _interior_points: &[f64], // known breakpoints (excluding endpoints)
     epsabs: f64,
     epsrel: f64,
     limit: usize,
@@ -223,7 +222,7 @@ where
         use_abs_error: false,
         use_simpson: true
     };
-    let result = quad(|x: f64| f(x), a, b, Some(qopts)).unwrap();
+    let result = quad(|x: f64| f(x), a, b, Some(qopts)).expect("Cannot converge");
     (result.value, result.abs_error)
 }
 
@@ -231,7 +230,6 @@ fn _integrate_qags_gsl<F>(
     f: F,
     a: f64,
     b: f64,
-    _interior_points: &[f64], // known breakpoints (excluding endpoints)
     epsabs: f64,
     epsrel: f64,
     limit: usize,
@@ -291,7 +289,6 @@ fn _compute_chen_likelihood(
     let epsabs = 0.0;      // SciPy default
     let epsrel = 0.001;     // Matches xpclr tolerance used elsewhere
     let limit = 50; // number of subintervals (QUADPACK-style, like SciPy)
-    // println!("compute_chen_likelihood xj: {xj}, nj: {nj}, c: {c}, p2: {p2}, var: {var}");
 
     // Recommended: use QAGP with breakpoints at c and 1-c
     let breaks = [c, 1.0 - c];
@@ -311,7 +308,6 @@ fn _compute_chen_likelihood(
             |p1| pdf_integral_scalar(p1, xj, nj, c, p2, var),
             a,
             b,
-            &breaks,
             epsabs,
             epsrel,
             limit,
@@ -320,7 +316,6 @@ fn _compute_chen_likelihood(
             |p1| pdf_integral_scalar(p1, xj, nj, c, p2, var),
             a,
             b,
-            &breaks,
             epsabs,
             epsrel,
             limit,
@@ -342,7 +337,6 @@ fn _compute_chen_likelihood(
             |p1| pdf_scalar(p1, c, p2, var),
             a,
             b,
-            &breaks,
             epsabs,
             epsrel,
             limit,
@@ -351,7 +345,6 @@ fn _compute_chen_likelihood(
             |p1| pdf_scalar(p1, c, p2, var),
             a,
             b,
-            &breaks,
             epsabs,
             epsrel,
             limit,
@@ -364,11 +357,6 @@ fn _compute_chen_likelihood(
     } else {
         -1800.0
     };
-    // println!(
-    //     "compute_chen_likelihood: {like_i} {like_b} {_err_i} {_err_b} {} {} {ratio}",
-    //     like_i.ln(),
-    //     like_b.ln()
-    // );
     Ok(ratio)
 }
 
@@ -395,7 +383,7 @@ fn compute_complikelihood(
                 let c = compute_c(*r, sc, None, None, Some(5_u32)).expect("Cannot compute C");
                 // Compute likelihood
                 // Use GSL QAGP with breakpoints to mirror SciPy's quad behavior
-                let cl = _compute_chen_likelihood(*xj, *nj, c, *p2, var, Some("qagp"))
+                let cl = _compute_chen_likelihood(*xj, *nj, c, *p2, var, Some("qags"))
                     .expect("Cannot compute the likelihood");
                 // Return the weighted margin
                 cl * *weight
