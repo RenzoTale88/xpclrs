@@ -260,7 +260,7 @@ fn main() {
         .expect("Failed running the XP-CLR function");
         // Write output
         log::info!("Writing output file to {out_path}...");
-        let mut xpclr_tsv = write_table(&format!("{out_path}.{}", &chrom));
+        let mut xpclr_tsv = write_table(&format!("{out_path}.{chrom}.xpclr"));
         let _ = to_table(&chrom, xpclr_res, &mut xpclr_tsv, &out_fmt);
     });
 

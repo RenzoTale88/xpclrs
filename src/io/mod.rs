@@ -11,7 +11,7 @@ use rust_htslib::bcf::{
     record::{Genotype, GenotypeAllele},
     IndexedReader, Read, Reader,
 };
-use statistical::{mean, standard_deviation};
+use statistical::{mean, population_standard_deviation};
 use std::{
     collections::HashSet,
     ffi::OsStr,
@@ -444,8 +444,8 @@ pub fn to_table(
         .filter_map(|&v| if v.2 .3.is_nan() { None } else { Some(v.2 .3) })
         .collect::<Vec<f64>>();
     let mean_xpclr = mean(&xpclr_values);
-    let std_xpclr = standard_deviation(&xpclr_values, None);
-    log::info!("XP-CLR mean +/- st.d: {mean_xpclr} (+/-{std_xpclr})");
+    let std_xpclr = population_standard_deviation(&xpclr_values, None);
+    log::info!("XP-CLR mean +/- st.d: {mean_xpclr} +/- {std_xpclr} (N={})", xpclr_values.len());
 
     for (_n, (start, stop, bpi, bpe, nsnps, avail), (model_li, null_li, selectionc, xpclr)) in
         xpclr_res

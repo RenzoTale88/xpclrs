@@ -6,9 +6,8 @@ use counter::Counter;
 use itertools::Itertools;
 use rand::prelude::IndexedRandom;
 use rayon::prelude::*;
-use rgsl::IntegrationWorkspace;
 use rust_htslib::bcf::record::{Genotype, GenotypeAllele};
-use scirs2_integrate::quad::{quad, QuadOptions};
+use scirs2_integrate::gaussian::gauss_kronrod21;
 use statistical::mean;
 use statrs::distribution::{Binomial, Discrete};
 use std::f64::consts::PI;
@@ -203,75 +202,20 @@ fn pdf_integral_scalar(p1: f64, xj: u64, nj: u64, c: f64, p2: f64, var: f64) -> 
     dens * pmf
 }
 
-fn _integrate_qags_scirs2<F>(
+fn _integrate_qags_gk_scirs2<F>(
     f: F,
     a: f64,
     b: f64,
-    epsabs: f64,
-    epsrel: f64,
-    limit: usize,
+    _epsabs: f64,
+    _epsrel: f64,
+    _limit: usize,
 ) -> (f64, f64)
 where
     F: Fn(f64) -> f64,
 {
     // QAGS: adaptive Gauss–Kronrod with singularity handling
-    let qopts = QuadOptions {
-        abs_tol: epsabs,
-        rel_tol: epsrel,
-        max_evals: limit,
-        use_abs_error: false,
-        use_simpson: true
-    };
-    let result = quad(|x: f64| f(x), a, b, Some(qopts)).expect("Cannot converge");
-    (result.value, result.abs_error)
-}
-
-fn _integrate_qags_gsl<F>(
-    f: F,
-    a: f64,
-    b: f64,
-    epsabs: f64,
-    epsrel: f64,
-    limit: usize,
-) -> (f64, f64)
-where
-    F: Fn(f64) -> f64,
-{
-    // QAGS: adaptive Gauss–Kronrod with singularity handling
-    let mut w = IntegrationWorkspace::new(10_000).expect("GSL workspace alloc failed");
-    let func = |x: f64| f(x);
-    let (res, err) = w
-        .qags(func, a, b, epsabs, epsrel, limit)
-        .expect("GSL qags failed");
-    (res, err)
-}
-
-fn _integrate_qagp_gsl<F>(
-    f: F,
-    a: f64,
-    b: f64,
-    interior_points: &[f64], // known breakpoints (excluding endpoints)
-    epsabs: f64,
-    epsrel: f64,
-    limit: usize,
-) -> (f64, f64)
-where
-    F: Fn(f64) -> f64,
-{
-    // QAGP: adaptive Gauss–Kronrod with user-supplied breakpoints
-    // pts must include endpoints a and b, sorted
-    let mut pts = Vec::with_capacity(interior_points.len() + 2);
-    pts.push(a);
-    pts.extend_from_slice(interior_points);
-    pts.push(b);
-    pts.sort_by(|x, y| x.partial_cmp(y).unwrap());
-
-    let mut w = IntegrationWorkspace::new(limit).expect("GSL workspace alloc failed");
-    let func = |x: f64| f(x);
-    let (res, err) = w
-        .qagp(func, &mut pts, epsabs, epsrel, limit)
-        .expect("GSL qagp failed");
-    (res, err)
+    let (value, abs_error, _est) = gauss_kronrod21(|x: f64| f(x), a, b);
+    (value, abs_error)
 }
 
 fn _compute_chen_likelihood(
@@ -280,7 +224,6 @@ fn _compute_chen_likelihood(
     c: f64,
     p2: f64,
     var: f64,
-    mode: Option<&str>,
 ) -> Result<f64> {
     // Integral bounds and tolerances matching SciPy quad
     let a = 0.001;
@@ -290,66 +233,25 @@ fn _compute_chen_likelihood(
     let epsrel = 0.001;     // Matches xpclr tolerance used elsewhere
     let limit = 50; // number of subintervals (QUADPACK-style, like SciPy)
 
-    // Recommended: use QAGP with breakpoints at c and 1-c
-    let breaks = [c, 1.0 - c];
-
     // Integral with binomial factor
-    let (like_i, _err_i) = match mode {
-        Some("qagp") =>  _integrate_qagp_gsl(
-            |p1| pdf_integral_scalar(p1, xj, nj, c, p2, var),
-            a,
-            b,
-            &breaks,
-            epsabs,
-            epsrel,
-            limit,
-        ),
-        Some("qags") => _integrate_qags_gsl(
-            |p1| pdf_integral_scalar(p1, xj, nj, c, p2, var),
-            a,
-            b,
-            epsabs,
-            epsrel,
-            limit,
-        ),
-        _ =>  _integrate_qags_scirs2(
-            |p1| pdf_integral_scalar(p1, xj, nj, c, p2, var),
-            a,
-            b,
-            epsabs,
-            epsrel,
-            limit,
-        ),
-    };
+    let (like_i, _err_i) = _integrate_qags_gk_scirs2(
+        |p1| pdf_integral_scalar(p1, xj, nj, c, p2, var),
+        a,
+        b,
+        epsabs,
+        epsrel,
+        limit,
+    );
 
     // Base integral of the pdf (denominator)
-    let (like_b, _err_b) = match mode {
-        Some("qagp") =>  _integrate_qagp_gsl(
-            |p1| pdf_scalar(p1, c, p2, var),
-            a,
-            b,
-            &breaks,
-            epsabs,
-            epsrel,
-            limit,
-        ),
-        Some("qags") => _integrate_qags_gsl(
-            |p1| pdf_scalar(p1, c, p2, var),
-            a,
-            b,
-            epsabs,
-            epsrel,
-            limit,
-        ),
-        _ =>  _integrate_qags_scirs2(
-            |p1| pdf_scalar(p1, c, p2, var),
-            a,
-            b,
-            epsabs,
-            epsrel,
-            limit,
-        ),
-    };
+    let (like_b, _err_b) = _integrate_qags_gk_scirs2(
+        |p1| pdf_scalar(p1, c, p2, var),
+        a,
+        b,
+        epsabs,
+        epsrel,
+        limit,
+    );
 
     // Return the right value
     let ratio = if like_i > 0.0 && like_b > 0.0 {
@@ -383,7 +285,7 @@ fn compute_complikelihood(
                 let c = compute_c(*r, sc, None, None, Some(5_u32)).expect("Cannot compute C");
                 // Compute likelihood
                 // Use GSL QAGP with breakpoints to mirror SciPy's quad behavior
-                let cl = _compute_chen_likelihood(*xj, *nj, c, *p2, var, Some("qags"))
+                let cl = _compute_chen_likelihood(*xj, *nj, c, *p2, var)
                     .expect("Cannot compute the likelihood");
                 // Return the weighted margin
                 cl * *weight
