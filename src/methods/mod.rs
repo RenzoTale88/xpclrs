@@ -146,25 +146,51 @@ pub fn compute_c(
 
 /// Compute pdf(p1 | c, p2, var) matching the Python logic for scalar p1.
 fn pdf_scalar(p1: f64, c: f64, p2: f64, var: f64) -> f64 {
-    let a_term = ((2.0 * PI * var).sqrt()).recip();
+    let p1 = vec![p1];
 
-    let mut r = 0.0;
+    // A-term
+    let a_term: f64 = (2f64 * PI * var).sqrt().powf(-1.0);
 
-    // Left side: p1 < c
-    if p1 < c {
-        let b_term_l = (c - p1) / (c * c);
-        let c_term_l = (p1 - c * p2).powi(2) / (2.0 * c * c * var);
-        r += a_term * b_term_l * (-c_term_l).exp();
+    // Create the target vector
+    let mut r: Vec<f64> = vec![0f64; p1.len()];
+
+    // Extract values where p1 is greater then 1-c
+    let bisector = PartialBisector::new(&p1);
+    let left = bisector.bisect_left(&c);
+    let right = bisector.bisect_right(&(1f64 - c));
+
+    // left hand side
+    let b_term_l = &p1[0..left]
+        .iter()
+        .map(|i| (c - i) / (c.powf(2f64)))
+        .collect::<Vec<f64>>();
+
+    let c_term_l = &p1[0..left]
+        .iter()
+        .map(|i| (i - (c * p2)).powf(2f64) / (2f64 * c.powf(2f64) * var))
+        .collect::<Vec<f64>>();
+
+    let l_slice = &mut r[..left];
+    for ((l_i, &b), &c) in l_slice.iter_mut().zip(b_term_l).zip(c_term_l) {
+        *l_i += a_term * b * (-c).exp();
     }
 
-    // Right side: p1 > 1 - c
-    if p1 > 1.0 - c {
-        let b_term_r = (p1 + c - 1.0) / (c * c);
-        let c_term_r = (p1 + c - 1.0 - c * p2).powi(2) / (2.0 * c * c * var);
-        r += a_term * b_term_r * (-c_term_r).exp();
-    }
+    // Repeat for right term
+    let b_term_r = &p1[right..]
+        .iter()
+        .map(|i| (i + c - 1.0_f64) / (c.powf(2f64)))
+        .collect::<Vec<f64>>();
 
-    r
+    let c_term_r = &p1[right..]
+        .iter()
+        .map(|i| (i + c - 1.0_f64 - (c * p2)).powf(2f64) / (2f64 * c.powf(2f64) * var))
+        .collect::<Vec<f64>>();
+
+    let r_slice = &mut r[right..];
+    for ((r_i, &b), &c) in r_slice.iter_mut().zip(b_term_r).zip(c_term_r) {
+        *r_i += a_term * b * (-c).exp();
+    }
+    r[0]
 }
 
 /// pdf_integral(p1) = pdf(p1) * BinomPMF(xj | nj, p1)
@@ -175,6 +201,30 @@ fn pdf_integral_scalar(p1: f64, xj: u64, nj: u64, c: f64, p2: f64, var: f64) -> 
     let logpmf = binom.ln_pmf((xj as i64).try_into().unwrap());
     let pmf = logpmf.exp();
     dens * pmf
+}
+
+fn _integrate_qags_scirs2<F>(
+    f: F,
+    a: f64,
+    b: f64,
+    _interior_points: &[f64], // known breakpoints (excluding endpoints)
+    epsabs: f64,
+    epsrel: f64,
+    limit: usize,
+) -> (f64, f64)
+where
+    F: Fn(f64) -> f64,
+{
+    // QAGS: adaptive Gauss–Kronrod with singularity handling
+    let qopts = QuadOptions {
+        abs_tol: epsabs,
+        rel_tol: epsrel,
+        max_evals: limit,
+        use_abs_error: false,
+        use_simpson: true
+    };
+    let result = quad(|x: f64| f(x), a, b, Some(qopts)).unwrap();
+    (result.value, result.abs_error)
 }
 
 fn _integrate_qags_gsl<F>(
@@ -239,7 +289,7 @@ fn _compute_chen_likelihood(
     let b = 0.999;
     // Use practical SciPy-like settings used in the Python implementation
     let epsabs = 0.0;      // SciPy default
-    let epsrel = 1e-3;     // Matches xpclr tolerance used elsewhere
+    let epsrel = 0.001;     // Matches xpclr tolerance used elsewhere
     let limit = 50; // number of subintervals (QUADPACK-style, like SciPy)
     // println!("compute_chen_likelihood xj: {xj}, nj: {nj}, c: {c}, p2: {p2}, var: {var}");
 
@@ -266,7 +316,7 @@ fn _compute_chen_likelihood(
             epsrel,
             limit,
         ),
-        _ =>  _integrate_qagp_gsl(
+        _ =>  _integrate_qags_scirs2(
             |p1| pdf_integral_scalar(p1, xj, nj, c, p2, var),
             a,
             b,
@@ -278,15 +328,35 @@ fn _compute_chen_likelihood(
     };
 
     // Base integral of the pdf (denominator)
-    let (like_b, _err_b) = _integrate_qagp_gsl(
-        |p1| pdf_scalar(p1, c, p2, var),
-        a,
-        b,
-        &breaks,
-        epsabs,
-        epsrel,
-        limit,
-    );
+    let (like_b, _err_b) = match mode {
+        Some("qagp") =>  _integrate_qagp_gsl(
+            |p1| pdf_scalar(p1, c, p2, var),
+            a,
+            b,
+            &breaks,
+            epsabs,
+            epsrel,
+            limit,
+        ),
+        Some("qags") => _integrate_qags_gsl(
+            |p1| pdf_scalar(p1, c, p2, var),
+            a,
+            b,
+            &breaks,
+            epsabs,
+            epsrel,
+            limit,
+        ),
+        _ =>  _integrate_qags_scirs2(
+            |p1| pdf_scalar(p1, c, p2, var),
+            a,
+            b,
+            &breaks,
+            epsabs,
+            epsrel,
+            limit,
+        ),
+    };
 
     // Return the right value
     let ratio = if like_i > 0.0 && like_b > 0.0 {
@@ -333,7 +403,7 @@ fn compute_complikelihood(
             .collect::<Vec<f64>>();
         // final value
         let ml: f64 = marginall.iter().sum();
-        println!("compute_complikelihood sc={sc} marginall={marginall:?} ml={ml}");
+        // println!("compute_complikelihood sc={sc} marginall={marginall:?} ml={ml}");
         Ok(-ml)
     }
 }
