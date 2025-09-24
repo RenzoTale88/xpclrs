@@ -20,6 +20,7 @@ use std::{
     io::{BufRead, BufReader, BufWriter, Write},
     path::Path,
 };
+use crate::methods::XPCLRResult;
 
 // Define multople readers for the indexed and unindexed XCF file
 pub enum XcfReader {
@@ -421,11 +422,7 @@ pub fn write_table(filename: &str) -> Box<dyn Write> {
 // win index, (start and stop of window), (bpi and bpe are edges),
 pub fn to_table(
     chrom: &str,
-    xpclr_res: Vec<(
-        usize,
-        (usize, usize, usize, usize, usize, usize),
-        (f64, f64, f64, f64),
-    )>,
+    xpclr_res: &[(usize, XPCLRResult)],
     xpclr_tsv: &mut Box<dyn std::io::Write>,
     outfmt: &str,
 ) -> Result<()> {
@@ -441,16 +438,26 @@ pub fn to_table(
     // Compute normalizing factors
     let xpclr_values = xpclr_res
         .iter()
-        .filter_map(|&v| if v.2 .3.is_nan() { None } else { Some(v.2 .3) })
+        .filter_map(|(_, r)| if r.xpclr.is_nan() { None } else { Some(r.xpclr) })
         .collect::<Vec<f64>>();
     let mean_xpclr = mean(&xpclr_values);
     let std_xpclr = population_standard_deviation(&xpclr_values, None);
     log::info!("XP-CLR mean +/- st.d: {mean_xpclr} +/- {std_xpclr} (N={})", xpclr_values.len());
 
-    for (_n, (start, stop, bpi, bpe, nsnps, avail), (model_li, null_li, selectionc, xpclr)) in
+    for (_n, res) in
         xpclr_res
     {
-        let xpclr_normalized = (xpclr - mean_xpclr) / std_xpclr;
+        let start = res.window.0;
+        let stop = res.window.1;
+        let bpi = res.window.2;
+        let bpe = res.window.3;
+        let nsnps = res.window.4;
+        let avail = res.window.5;
+        let model_li = res.ll_sel;
+        let null_li = res.ll_neut;
+        let selectionc = res.sel_coeff;
+        let xpclr = res.xpclr;
+        let xpclr_normalized = (res.xpclr - mean_xpclr) / std_xpclr;
         writeln!(xpclr_tsv, "{chrom}{delim}{start}{delim}{stop}{delim}{bpi}{delim}{bpe}{delim}{model_li}{delim}{null_li}{delim}{selectionc}{delim}{nsnps}{delim}{avail}{delim}{xpclr}{delim}{xpclr_normalized}")?;
     }
 

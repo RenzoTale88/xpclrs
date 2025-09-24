@@ -589,19 +589,22 @@ fn compute_weights(
     Ok(weights)
 }
 
+// Define a XPCLR result structure
+pub struct XPCLRResult {
+    pub window: (usize, usize, usize, usize, usize, usize), // (start, stop, bpi, bpe, nsnps, navail)
+    pub ll_sel: f64,
+    pub ll_neut: f64,
+    pub sel_coeff: f64,
+    pub xpclr: f64,
+}
+
 // Main XP-CLR caller
 pub fn xpclr(
     (gt1, gt2): (Vec<Vec<Genotype>>, Vec<Vec<Genotype>>), // Genotypes
     (bpositions, geneticd, windows): (Vec<usize>, Vec<f64>, Vec<(usize, usize)>), // Positions
     (ldcutoff, phased): (Option<f64>, Option<bool>),      // LD-related
     (maxsnps, minsnps): (usize, usize),                   // Size/count filters
-) -> Result<
-    Vec<(
-        usize,
-        (usize, usize, usize, usize, usize, usize),
-        (f64, f64, f64, f64),
-    )>,
-> {
+) -> Result<Vec<(usize, XPCLRResult,)>> {
     let sel_coeffs = vec![
         0.0, 0.00001, 0.00005, 0.0001, 0.0002, 0.0004, 0.0006, 0.0008, 0.001, 0.003, 0.005, 0.01,
         0.05, 0.08, 0.1, 0.15,
@@ -619,7 +622,7 @@ pub fn xpclr(
     log::info!("Omega: {w}");
 
     // Process each window
-    let mut results: Vec<(usize, (usize, usize, usize, usize, usize, usize), (f64, f64, f64, f64))> = windows
+    let mut results: Vec<(usize, XPCLRResult)> = windows
         // Parallellize by window
         .par_iter()
         .enumerate()
@@ -629,8 +632,14 @@ pub fn xpclr(
             let max_ix = ix.iter().last().unwrap_or(&0_usize).to_owned();
             log::debug!("xpclr Window idx: {n}; Window BP interval: {start}-{stop}; N SNPs selected: {n_snps}; N SNP available: {n_avail}");
             if n_snps < minsnps {
-                let xpclr_vals = (f64::NAN, f64::NAN, f64::NAN, f64::NAN);
-                (n, (*start, *stop, *start, *stop, n_snps, n_avail), xpclr_vals)
+                let xpclr_win_res = XPCLRResult{
+                    window: (*start, *stop, *start, *stop, n_snps, n_avail),
+                    ll_sel: f64::NAN,
+                    ll_neut: f64::NAN,
+                    sel_coeff: f64::NAN,
+                    xpclr: f64::NAN,
+                };
+                (n, xpclr_win_res)
             } else {
                 let bpi = bpositions[ix[0]];
                 let bpe = bpositions[max_ix];
@@ -655,7 +664,14 @@ pub fn xpclr(
                     None
                 ).expect("Failed computing XP-CLR for window");
                 let xpclr_v = 2.0_f64 * (xpclr_res.0 - xpclr_res.1);
-                (n, (*start, *stop, bpi, bpe, n_snps, n_avail), (xpclr_res.0, xpclr_res.1, xpclr_res.2, xpclr_v))
+                let xpclr_win_res = XPCLRResult{
+                    window: (*start, *stop, bpi, bpe, n_snps, n_avail),
+                    ll_sel: xpclr_res.0,
+                    ll_neut: xpclr_res.1,
+                    sel_coeff: xpclr_res.2,
+                    xpclr: xpclr_v,
+                };
+                (n, xpclr_win_res)
             }
         })
         .collect();
