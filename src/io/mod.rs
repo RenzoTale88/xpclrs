@@ -28,6 +28,14 @@ pub enum XcfReader {
     Readthrough(bcf::Reader),
 }
 
+// Genotype data structure
+pub struct GenoData {
+    pub positions: Vec<usize>,
+    pub gt1: Vec<Vec<Genotype>>,
+    pub gt2: Vec<Vec<Genotype>>,
+    pub gdistances: Vec<f64>,
+}
+
 /// Same as smakcr, but single threaded for now
 pub fn read_xcf<P: AsRef<Path> + Display>(path: P, has_index: bool) -> Result<XcfReader> {
     let xcf_reader: XcfReader = if has_index {
@@ -97,14 +105,6 @@ fn get_gt_index(full_list: &Vec<&[u8]>, subset: &[String]) -> Result<Vec<usize>>
     Ok(indices)
 }
 
-// Structure of loaded data
-pub struct GenoData {
-    pub positions: Vec<usize>,
-    pub gt1: Vec<Vec<Genotype>>,
-    pub gt2: Vec<Vec<Genotype>>,
-    pub gdistances: Vec<f64>,
-}
-
 // Process indexed XCF file
 fn indexed_xcf(
     xcf_fn: String,
@@ -113,7 +113,7 @@ fn indexed_xcf(
     chrom: &str,
     start: u64,
     end: Option<u64>,
-    (rrate, _gdistkey): (Option<f64>, Option<String>),
+    (rrate, gdistkey): (Option<f64>, Option<String>),
 ) -> Result<GenoData> {
     log::info!("Indexed reader.");
     // Prepare the indexed reader
@@ -186,6 +186,12 @@ fn indexed_xcf(
                 .flat_map(|g| g.iter().filter_map(|a| a.index()))
                 .collect::<Counter<u32>>();
 
+            // Define genetic position
+            let gd = match &gdistkey {
+                Some(key) => record.info(&key.as_bytes()).float().ok().flatten().expect("Missing info field for genetic position")[0] as f64,
+                None => record.pos() as f64 * rrate,
+            };
+
             // Union both sets
             let mut all_alleles: Counter<_> = alleles1.clone();
             all_alleles.extend(&alleles2);
@@ -210,7 +216,7 @@ fn indexed_xcf(
                 None
             } else {
                 pass += 1;
-                Some((record.pos() as usize, gt1, gt2, record.pos() as f64 * rrate))
+                Some((record.pos() as usize, gt1, gt2, gd))
             }
         })
         .multiunzip();
@@ -252,7 +258,7 @@ fn readthrough_xcf(
     chrom: &str,
     start: u64,
     end: Option<u64>,
-    (rrate, _gdistkey): (Option<f64>, Option<String>),
+    (rrate, gdistkey): (Option<f64>, Option<String>),
 ) -> Result<GenoData> {
     log::info!("Streamed reader.");
     log::info!("This is substantially slower than the indexed one.");
@@ -336,6 +342,12 @@ fn readthrough_xcf(
             let mut all_alleles: Counter<_> = alleles1.clone();
             all_alleles.extend(&alleles2);
 
+            // Define genetic position
+            let gd = match &gdistkey {
+                Some(key) => record.info(&key.as_bytes()).float().ok().flatten().expect("Missing info field for genetic position")[0] as f64,
+                None => record.pos() as f64 * rrate,
+            };
+
             // Perform filtering and counting
             if all_alleles.len() > 2 {
                 skipped += 1;
@@ -356,7 +368,7 @@ fn readthrough_xcf(
                 None
             } else {
                 pass += 1;
-                Some((record.pos() as usize, gt1, gt2, record.pos() as f64 * rrate))
+                Some((record.pos() as usize, gt1, gt2, gd))
             }
         })
         .multiunzip();
@@ -399,7 +411,7 @@ pub fn process_xcf(
     chrom: &str,
     start: Option<u64>,
     end: Option<u64>,
-    (rrate, _gdistkey): (Option<f64>, Option<String>),
+    (rrate, gdistkey): (Option<f64>, Option<String>),
 ) -> Result<GenoData> {
     // Process the data depending on the presence of the index
     let start = start.unwrap_or(0);
@@ -408,8 +420,8 @@ pub fn process_xcf(
     let csi_path = format!("{xcf_fn}.csi");
     let has_index = Path::exists(Path::new(&tbi_path)) || Path::exists(Path::new(&csi_path));
     let g_data = match has_index {
-        true => indexed_xcf(xcf_fn, s1, s2, chrom, start, end, (rrate, None)),
-        false => readthrough_xcf(xcf_fn, s1, s2, chrom, start, end, (rrate, None)),
+        true => indexed_xcf(xcf_fn, s1, s2, chrom, start, end, (rrate, gdistkey)),
+        false => readthrough_xcf(xcf_fn, s1, s2, chrom, start, end, (rrate, gdistkey)),
     }
     .expect("Failed to parse the VCF/BCF file");
     Ok(g_data)

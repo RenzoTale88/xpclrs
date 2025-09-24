@@ -182,6 +182,7 @@ fn main() {
     let maxsnps = matches.get_one::<u64>("MAXSNPS").copied().unwrap();
     let ldcutoff = matches.get_one::<f64>("LDCUTOFF").copied();
     let rrate = matches.get_one::<f64>("RECRATE").copied();
+    let distkey = matches.get_one::<String>("DISTKEYS").cloned();
     let phased = matches.get_one::<bool>("PHASED").copied();
 
     // Get the VCF
@@ -228,7 +229,7 @@ fn main() {
         &chrom,
         start,
         end,
-        (rrate, None),
+        (rrate, distkey),
     )
     .expect("Failed to read the VCF/BCF file");
 
