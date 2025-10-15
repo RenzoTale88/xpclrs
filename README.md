@@ -1,16 +1,14 @@
 # xpclrs
 A rust implementation of the XP-CLR method.
 
-## Installation
-First, install the system dependencies:
-```
-sudo apt-get install libgsl0-dev 
-```
+> ## WARNING
+> This tool is currently under active development, and some issues still need to be hammered out. Keep in touch
 
-Then compile the code:
+## Installation
+Clone and compile the code:
 ```
 git clone https://www.github.com/RenzoTale88/xpclrs
-cd xpclr
+cd xpclrs
 cargo build --release
 ```
 
