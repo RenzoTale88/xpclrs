@@ -189,7 +189,7 @@ fn indexed_xcf(
             // Define genetic position
             let gd = match &gdistkey {
                 Some(key) => record
-                    .info(&key.as_bytes())
+                    .info(key.as_bytes())
                     .float()
                     .ok()
                     .flatten()
@@ -351,7 +351,7 @@ fn readthrough_xcf(
             // Define genetic position
             let gd = match &gdistkey {
                 Some(key) => record
-                    .info(&key.as_bytes())
+                    .info(key.as_bytes())
                     .float()
                     .ok()
                     .flatten()
