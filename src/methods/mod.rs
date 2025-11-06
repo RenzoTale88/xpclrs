@@ -1,6 +1,7 @@
 /*
 This module provides the functions required to compute the XP-CLR.
 */
+use crate::io::GenoData;
 use anyhow::Result;
 use counter::Counter;
 use itertools::Itertools;
@@ -11,7 +12,6 @@ use scirs2_integrate::gaussian::gauss_kronrod21;
 use statistical::mean;
 use statrs::distribution::{Binomial, Discrete};
 use std::f64::consts::PI;
-use crate::io::GenoData;
 
 // Drafted bisect left and right
 pub struct Bisector<'a, T> {
@@ -220,19 +220,13 @@ where
     (value, abs_error)
 }
 
-fn _compute_chen_likelihood(
-    xj: u64,
-    nj: u64,
-    c: f64,
-    p2: f64,
-    var: f64,
-) -> Result<f64> {
+fn _compute_chen_likelihood(xj: u64, nj: u64, c: f64, p2: f64, var: f64) -> Result<f64> {
     // Integral bounds and tolerances matching SciPy quad
     let a = 0.001;
     let b = 0.999;
     // Use practical SciPy-like settings used in the Python implementation
-    let epsabs = 0.0;      // SciPy default
-    let epsrel = 0.001;     // Matches xpclr tolerance used elsewhere
+    let epsabs = 0.0; // SciPy default
+    let epsrel = 0.001; // Matches xpclr tolerance used elsewhere
     let limit = 50; // number of subintervals (QUADPACK-style, like SciPy)
 
     // Integral with binomial factor
@@ -246,14 +240,8 @@ fn _compute_chen_likelihood(
     );
 
     // Base integral of the pdf (denominator)
-    let (like_b, _err_b) = _integrate_qags_gk_scirs2(
-        |p1| pdf_scalar(p1, c, p2, var),
-        a,
-        b,
-        epsabs,
-        epsrel,
-        limit,
-    );
+    let (like_b, _err_b) =
+        _integrate_qags_gk_scirs2(|p1| pdf_scalar(p1, c, p2, var), a, b, epsabs, epsrel, limit);
 
     // Return the right value
     let ratio = if like_i > 0.0 && like_b > 0.0 {
@@ -605,10 +593,10 @@ pub fn xpclr(
     g_data: GenoData,
     windows: Vec<(usize, usize)>, // Windows
     ldcutoff: Option<f64>,
-    phased: Option<bool>,      // LD-related
+    phased: Option<bool>, // LD-related
     maxsnps: usize,
-    minsnps: usize,                   // Size/count filters
-) -> Result<Vec<(usize, XPCLRResult,)>> {
+    minsnps: usize, // Size/count filters
+) -> Result<Vec<(usize, XPCLRResult)>> {
     let sel_coeffs = vec![
         0.0, 0.00001, 0.00005, 0.0001, 0.0002, 0.0004, 0.0006, 0.0008, 0.001, 0.003, 0.005, 0.01,
         0.05, 0.08, 0.1, 0.15,

@@ -1,5 +1,6 @@
 use clap::{builder::PossibleValue, value_parser, Arg, Command};
 use env_logger::{self, Env};
+use rayon::current_num_threads;
 use xpclrs::{
     io::{process_xcf, read_file, to_table, write_table},
     methods::xpclr,
@@ -17,148 +18,147 @@ use xpclrs::{
 
 fn main() {
     let version = env!("CARGO_PKG_VERSION");
-    let matches =
-        Command::new("xpclr")
-            .version(version)
-            .author("Andrea Talenti <andrea.talenti@ed.ac.uk>")
-            .about("Compute the XP-CLR for a pair of populations from a VCF file.")
-            .arg(
-                Arg::new("VCF")
-                    .short('I')
-                    .long("input")
-                    .required(true)
-                    .help("input VCF file"),
-            )
-            .arg(
-                Arg::new("OUT")
-                    .short('O')
-                    .long("out")
-                    .required(true)
-                    .help("Output file name."),
-            )
-            .arg(
-                Arg::new("SAMPLES_A")
-                    .short('A')
-                    .long("samplesA")
-                    .required(true)
-                    .help("Samples in population A. Path to file with each ID on a line."),
-            )
-            .arg(
-                Arg::new("SAMPLES_B")
-                    .short('B')
-                    .long("samplesB")
-                    .required(true)
-                    .help("Samples in population B. Path to file with each ID on a line."),
-            )
-            .arg(
-                Arg::new("RECRATE")
-                    .long("rrate")
-                    .short('R')
-                    .required(false)
-                    .default_value("1e-8")
-                    .value_parser(value_parser!(f64))
-                    .help("Recombination rate per base."),
-            )
-            .arg(
-                Arg::new("LDCUTOFF")
-                    .long("ld")
-                    .short('L')
-                    .required(false)
-                    .default_value("0.95")
-                    .value_parser(value_parser!(f64))
-                    .help("LD cutoff."),
-            )
-            .arg(
-                Arg::new("MAXSNPS")
-                    .long("maxsnps")
-                    .short('m')
-                    .required(false)
-                    .default_value("200")
-                    .value_parser(value_parser!(u64))
-                    .help("Max SNPs in a window."),
-            )
-            .arg(
-                Arg::new("MINSNPS")
-                    .long("minsnps")
-                    .short('N')
-                    .required(false)
-                    .default_value("10")
-                    .value_parser(value_parser!(u64))
-                    .help("Min SNPs in a window."),
-            )
-            .arg(
-                Arg::new("SIZE")
-                    .long("size")
-                    .required(false)
-                    .default_value("20000")
-                    .value_parser(value_parser!(i32))
-                    .help("Sliding window size."),
-            )
-            .arg(
-                Arg::new("START")
-                    .long("start")
-                    .required(false)
-                    .default_value("1")
-                    .value_parser(value_parser!(u64))
-                    .help("Start position for the sliding windows."),
-            )
-            .arg(
-                Arg::new("STOP")
-                    .long("stop")
-                    .required(false)
-                    .value_parser(value_parser!(u64))
-                    .help("Stop position for the sliding windows."),
-            )
-            .arg(
-                Arg::new("STEP")
-                    .long("step")
-                    .required(false)
-                    .default_value("20000")
-                    .value_parser(value_parser!(u64))
-                    .help("Step size for the sliding windows."),
-            )
-            .arg(
-                Arg::new("CHROM")
-                    .short('C')
-                    .long("chr")
-                    .required(true)
-                    .help("Chromosome to analyse."),
-            )
-            .arg(Arg::new("DISTKEYS").long("gdistkey").required(false).help(
-                "Key in INFO field providing the genetic position of each site in the VCF file",
-            ))
-            .arg(
-                Arg::new("NTHREADS")
-                    .short('t')
-                    .long("threads")
-                    .required(false)
-                    .default_value("1")
-                    .value_parser(value_parser!(usize))
-                    .help("Number of threads to use"),
-            )
-            .arg(
-                Arg::new("OUTFMT")
-                    .short('f')
-                    .long("format")
-                    .required(false)
-                    .default_value("tsv")
-                    .value_parser([
-                        PossibleValue::new("tsv"),
-                        PossibleValue::new("txt"),
-                        PossibleValue::new("csv"),
-                    ])
-                    .help("Format to save the output (csv, tsv, txt)"),
-            )
-            .arg(
-                Arg::new("LOG")
-                    .short('l')
-                    .long("log")
-                    .required(false)
-                    .default_value("info")
-                    .value_parser([PossibleValue::new("info"), PossibleValue::new("debug")])
-                    .help("Number of threads to use"),
-            )
-            .get_matches();
+    let matches = Command::new("xpclr")
+        .version(version)
+        .author("Andrea Talenti <andrea.talenti@ed.ac.uk>")
+        .about("Compute the XP-CLR for a pair of populations from a VCF file.")
+        .arg(
+            Arg::new("VCF")
+                .short('I')
+                .long("input")
+                .required(true)
+                .help("input VCF file"),
+        )
+        .arg(
+            Arg::new("OUT")
+                .short('O')
+                .long("out")
+                .required(true)
+                .help("Output file name."),
+        )
+        .arg(
+            Arg::new("SAMPLES_A")
+                .short('A')
+                .long("samplesA")
+                .required(true)
+                .help("Samples in population A. Path to file with each ID on a line."),
+        )
+        .arg(
+            Arg::new("SAMPLES_B")
+                .short('B')
+                .long("samplesB")
+                .required(true)
+                .help("Samples in population B. Path to file with each ID on a line."),
+        )
+        .arg(
+            Arg::new("RECRATE")
+                .long("rrate")
+                .short('R')
+                .required(false)
+                .default_value("1e-8")
+                .value_parser(value_parser!(f64))
+                .help("Recombination rate per base."),
+        )
+        .arg(
+            Arg::new("LDCUTOFF")
+                .long("ld")
+                .short('L')
+                .required(false)
+                .default_value("0.95")
+                .value_parser(value_parser!(f64))
+                .help("LD cutoff."),
+        )
+        .arg(
+            Arg::new("MAXSNPS")
+                .long("maxsnps")
+                .short('m')
+                .required(false)
+                .default_value("200")
+                .value_parser(value_parser!(u64))
+                .help("Max SNPs in a window."),
+        )
+        .arg(
+            Arg::new("MINSNPS")
+                .long("minsnps")
+                .short('N')
+                .required(false)
+                .default_value("10")
+                .value_parser(value_parser!(u64))
+                .help("Min SNPs in a window."),
+        )
+        .arg(
+            Arg::new("SIZE")
+                .long("size")
+                .required(false)
+                .default_value("20000")
+                .value_parser(value_parser!(i32))
+                .help("Sliding window size."),
+        )
+        .arg(
+            Arg::new("START")
+                .long("start")
+                .required(false)
+                .default_value("1")
+                .value_parser(value_parser!(u64))
+                .help("Start position for the sliding windows."),
+        )
+        .arg(
+            Arg::new("STOP")
+                .long("stop")
+                .required(false)
+                .value_parser(value_parser!(u64))
+                .help("Stop position for the sliding windows."),
+        )
+        .arg(
+            Arg::new("STEP")
+                .long("step")
+                .required(false)
+                .default_value("20000")
+                .value_parser(value_parser!(u64))
+                .help("Step size for the sliding windows."),
+        )
+        .arg(
+            Arg::new("CHROM")
+                .short('C')
+                .long("chr")
+                .required(true)
+                .help("Chromosome to analyse."),
+        )
+        .arg(Arg::new("DISTKEYS").long("gdistkey").required(false).help(
+            "Key in INFO field providing the genetic position of each variant in the VCF file",
+        ))
+        .arg(
+            Arg::new("NTHREADS")
+                .short('t')
+                .long("threads")
+                .required(false)
+                .default_value("1")
+                .value_parser(value_parser!(usize))
+                .help("Number of threads to use"),
+        )
+        .arg(
+            Arg::new("OUTFMT")
+                .short('f')
+                .long("format")
+                .required(false)
+                .default_value("tsv")
+                .value_parser([
+                    PossibleValue::new("tsv"),
+                    PossibleValue::new("txt"),
+                    PossibleValue::new("csv"),
+                ])
+                .help("Format to save the output (csv, tsv, txt)"),
+        )
+        .arg(
+            Arg::new("LOG")
+                .short('l')
+                .long("log")
+                .required(false)
+                .default_value("info")
+                .value_parser([PossibleValue::new("info"), PossibleValue::new("debug")])
+                .help("Number of threads to use"),
+        )
+        .get_matches();
 
     // set up logging
     let log_level = matches
@@ -199,9 +199,13 @@ fn main() {
         .get_one::<String>("OUTFMT")
         .expect("Invalid output format")
         .to_owned();
-    let n_threads = matches
+    let n_threads = match matches
         .get_one::<usize>("NTHREADS")
-        .expect("Number of threads invalid");
+        .expect("Number of threads invalid")
+    {
+        0 => current_num_threads(),
+        v => *v,
+    };
 
     // Get the sample lists
     let sample_a = matches
@@ -244,8 +248,9 @@ fn main() {
         .collect::<Vec<(usize, usize)>>();
 
     // Define thread pool
+    log::info!("Using {n_threads} threads.");
     let pool = rayon::ThreadPoolBuilder::new()
-        .num_threads(*n_threads)
+        .num_threads(n_threads)
         .build()
         .unwrap();
 

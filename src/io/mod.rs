@@ -1,6 +1,7 @@
 /*
 This module provides the I/O functions (e.g. VCF/BCF readers, text readers etc).
 */
+use crate::methods::XPCLRResult;
 use anyhow::Result;
 use counter::Counter;
 use flate2::write;
@@ -20,7 +21,6 @@ use std::{
     io::{BufRead, BufReader, BufWriter, Write},
     path::Path,
 };
-use crate::methods::XPCLRResult;
 
 // Define multople readers for the indexed and unindexed XCF file
 pub enum XcfReader {
@@ -188,7 +188,13 @@ fn indexed_xcf(
 
             // Define genetic position
             let gd = match &gdistkey {
-                Some(key) => record.info(&key.as_bytes()).float().ok().flatten().expect("Missing info field for genetic position")[0] as f64,
+                Some(key) => record
+                    .info(&key.as_bytes())
+                    .float()
+                    .ok()
+                    .flatten()
+                    .expect("Missing info field for genetic position")[0]
+                    as f64,
                 None => record.pos() as f64 * rrate,
             };
 
@@ -242,11 +248,11 @@ fn indexed_xcf(
     log::info!(" - {monom_gt2} monomorphic in pop B");
     log::info!(" - {miss_gt1} all-missing in pop A");
     log::info!(" - {miss_gt2} all-missing in pop B");
-    Ok(GenoData{
+    Ok(GenoData {
         positions,
         gt1: gt1_data,
         gt2: gt2_data,
-        gdistances: gd_data
+        gdistances: gd_data,
     })
 }
 
@@ -344,7 +350,13 @@ fn readthrough_xcf(
 
             // Define genetic position
             let gd = match &gdistkey {
-                Some(key) => record.info(&key.as_bytes()).float().ok().flatten().expect("Missing info field for genetic position")[0] as f64,
+                Some(key) => record
+                    .info(&key.as_bytes())
+                    .float()
+                    .ok()
+                    .flatten()
+                    .expect("Missing info field for genetic position")[0]
+                    as f64,
                 None => record.pos() as f64 * rrate,
             };
 
@@ -395,11 +407,11 @@ fn readthrough_xcf(
     log::info!(" - {monom_gt2} monomorphic in pop B");
     log::info!(" - {miss_gt1} all-missing in pop A");
     log::info!(" - {miss_gt2} all-missing in pop B");
-    Ok(GenoData{
+    Ok(GenoData {
         positions,
         gt1: gt1_data,
         gt2: gt2_data,
-        gdistances: gd_data
+        gdistances: gd_data,
     })
 }
 
@@ -468,15 +480,22 @@ pub fn to_table(
     // Compute normalizing factors
     let xpclr_values = xpclr_res
         .iter()
-        .filter_map(|(_, r)| if r.xpclr.is_nan() { None } else { Some(r.xpclr) })
+        .filter_map(|(_, r)| {
+            if r.xpclr.is_nan() {
+                None
+            } else {
+                Some(r.xpclr)
+            }
+        })
         .collect::<Vec<f64>>();
     let mean_xpclr = mean(&xpclr_values);
     let std_xpclr = population_standard_deviation(&xpclr_values, None);
-    log::info!("XP-CLR mean +/- st.d: {mean_xpclr} +/- {std_xpclr} (N={})", xpclr_values.len());
+    log::info!(
+        "XP-CLR mean +/- st.d: {mean_xpclr} +/- {std_xpclr} (N={})",
+        xpclr_values.len()
+    );
 
-    for (_n, res) in
-        xpclr_res
-    {
+    for (_n, res) in xpclr_res {
         let start = res.window.0;
         let stop = res.window.1;
         let bpi = res.window.2;
