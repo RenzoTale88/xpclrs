@@ -109,12 +109,12 @@ pub fn est_omega(q1: &[f64], q2: &[f64]) -> Result<f64> {
 
 // Measure variability for each SNP
 pub fn var_estimate(w: f64, q2: f64) -> Result<f64> {
-    log::debug!(
-        "var_estimate {w} {q2} {} {} {}",
-        1.0_f64 - q2,
-        q2 * (1.0_f64 - q2),
-        w * (q2 * (1.0_f64 - q2))
-    );
+    // log::debug!(
+    //     "var_estimate {w} {q2} {} {} {}",
+    //     1.0_f64 - q2,
+    //     q2 * (1.0_f64 - q2),
+    //     w * (q2 * (1.0_f64 - q2))
+    // );
     Ok(w * (q2 * (1.0_f64 - q2)))
 }
 
@@ -203,6 +203,7 @@ fn pdf_integral_scalar(p1: f64, xj: u64, nj: u64, c: f64, p2: f64, var: f64) -> 
     dens * pmf
 }
 
+// Integration function
 fn _integrate_qags_gk_scirs2<F>(
     f: F,
     a: f64,
@@ -265,7 +266,7 @@ fn _compute_chen_likelihood(
 
 // Compute composite likelihood
 fn compute_complikelihood(
-    sc_m: (f64, Option<usize>),
+    sc: f64,
     xs: &[u64],
     ns: &[u64],
     rds: &[f64],
@@ -273,8 +274,6 @@ fn compute_complikelihood(
     weights: &[f64],
     omegas: &[f64],
 ) -> Result<f64> {
-    let sc = sc_m.0;
-    let _method = sc_m.1.unwrap_or(0);
     if !(0.0..1.0).contains(&sc) {
         Ok(f64::INFINITY)
     } else {
@@ -306,7 +305,7 @@ fn compute_xpclr(
     weights: &[f64],
     omegas: &[f64],
     sel_coeffs: &[f64],
-    method: Option<usize>,
+    _method: Option<usize>,
 ) -> Result<(f64, f64, f64)> {
     // Extract counts
     let xs = counts.0;
@@ -320,19 +319,21 @@ fn compute_xpclr(
     // Define selection coefficient
     for (counter, sc) in sel_coeffs.iter().enumerate() {
         // Compute ll
-        let ll = compute_complikelihood((*sc, method), xs, ns, rds, p2freqs, weights, omegas)
+        let ll = compute_complikelihood(*sc, xs, ns, rds, p2freqs, weights, omegas)
             .expect("Cannot infer composite likelihood");
         if counter == 0 {
             null_model_li = ll;
         }
-        log::debug!("compute_xpclr {counter} {sc} {ll}");
+        log::debug!("compute_xpclr_iter {counter} {sc} {ll} {}", ll < maximum_li);
         // Replace values
         if ll < maximum_li {
             maximum_li = ll;
             maxli_sc = *sc;
+        } else {
+            break;
         }
     }
-    log::debug!("compute_xpclr {maximum_li} {null_model_li} {maxli_sc}\n\n");
+    log::debug!("compute_xpclr_final {maximum_li} {null_model_li} {maxli_sc}\n\n");
     Ok((-maximum_li, -null_model_li, maxli_sc))
 }
 
@@ -644,8 +645,8 @@ pub fn xpclr(
                 };
                 (n, xpclr_win_res)
             } else {
-                let bpi = g_data.positions[ix[0]];
-                let bpe = g_data.positions[max_ix];
+                let bpi = g_data.positions[ix[0]] + 1;
+                let bpe = g_data.positions[max_ix] + 1;
                 // Do not clone, just refer to them
                 let (gt_range, ar_range, gd_range, a1_range, t1_range, p2freqs): (Vec<&Vec<Genotype>>, Vec<u32>, Vec<f64>, Vec<u64>, Vec<u64>, Vec<f64>) = Itertools::multiunzip(ix.iter().map(|&i| (&g_data.gt2[i], &ar[i], &g_data.gdistances[i], &a1[i], &t1[i], &q2[i])));
                 // Compute distances from the average gen. dist.
@@ -656,7 +657,7 @@ pub fn xpclr(
                 let weights = compute_weights(gt_range, ar_range, ldcutoff, isphased).expect("Failed to compute the weights");
                 let omegas = vec![w; rds.len()];
                 // Compute XP-CLR
-                log::debug!("xpclr {start} {stop} {} {p2freqs:?}", rds.len());
+                log::debug!("P2freqs {start} {stop} {} {p2freqs:?}", p2freqs.len());
                 let xpclr_res = compute_xpclr(
                     (&a1_range, &t1_range),
                     &rds,

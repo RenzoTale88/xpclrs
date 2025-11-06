@@ -98,7 +98,7 @@ fn main() {
                 Arg::new("START")
                     .long("start")
                     .required(false)
-                    .default_value("0")
+                    .default_value("1")
                     .value_parser(value_parser!(u64))
                     .help("Start position for the sliding windows."),
             )
@@ -240,7 +240,7 @@ fn main() {
     };
     let windows = (start.unwrap()..end)
         .step_by(step as usize)
-        .map(|v| (v as usize, (v as usize) + (step as usize)))
+        .map(|v| (v as usize, (v as usize) + (step as usize) - 1))
         .collect::<Vec<(usize, usize)>>();
 
     // Define thread pool
