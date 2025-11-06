@@ -1,0 +1,74 @@
+name: Rust
+
+on:
+  push:
+    branches: [ "main" ]
+  pull_request:
+    branches: [ "main" ]
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        build: [
+          ubuntu,
+          windows,
+          macos_arm64,
+          macos_x86_64
+        ]
+        include:
+          - build: macos_arm64
+            os: macos-latest
+          - build: macos_x86_64
+            os: macos-13
+          - build: windows
+            os: windows-latest
+          - build: ubuntu
+            os: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Build
+      run: cargo build --verbose
+
+    - name: Run tests
+      run: cargo test --verbose
+
+    - name: Run clippy
+      run: cargo clippy -- -Dwarnings
+
+    - name: Release
+      run: cargo build --release
+
+    # Upload the binaries from the ubuntu analysis
+    - name: Upload artifacts
+      if: matrix.os == 'ubuntu-latest'
+      uses: actions/upload-artifact@v4
+      with:
+        name: binaries
+        path: target/release
+        retention-days: 0.5
+
+  # Test the binaries
+  exe:
+    needs: build  # This job depends on the build job
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+    steps:
+      - uses: actions/checkout@v4
+      # Download the Ubuntu artifact from the build job
+      - name: Download Binaries
+        uses: actions/download-artifact@v4
+        with:
+          name: binaries
+          path: ./bin/  # This will store the downloaded artifacts in ./bin
+      - name: Run tests
+        run: |
+          chmod +x ./bin/xpclrs
+          ./bin/xpclrs --help
