@@ -69,7 +69,16 @@ jobs:
         with:
           name: binaries
           path: ./bin/  # This will store the downloaded artifacts in ./bin
-      - name: Run tests
+      - name: Run help
         run: |
           chmod +x ./bin/xpclrs
           ./bin/xpclrs --help
+      - name: Run test
+        run: |
+          chmod +x ./bin/xpclrs
+          wget https://raw.githubusercontent.com/hardingnj/xpclr/refs/heads/master/fixture/samplesA.txt
+          wget https://raw.githubusercontent.com/hardingnj/xpclr/refs/heads/master/fixture/samplesB.txt
+          wget https://raw.githubusercontent.com/hardingnj/xpclr/refs/heads/master/fixture/small.vcf.gz
+          wget https://raw.githubusercontent.com/hardingnj/xpclr/refs/heads/master/fixture/small.vcf.gz.tbi
+          ./bin/xpclrs --input small.vcf.gz --out test --samplesA samplesA.txt --samplesB samplesB.txt --chr 3L -t 1
+          cat test.3L.xpclr
