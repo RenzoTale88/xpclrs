@@ -35,7 +35,7 @@ jobs:
 
     - name: Linux deps
       if: matrix.os == 'ubuntu-latest'
-      run: apt-get update && apt-get install libopenblas-dev
+      run: sudo apt-get update && sudo apt-get install libopenblas-dev
 
     - name: Build
       run: cargo build --verbose
