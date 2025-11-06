@@ -17,7 +17,6 @@ jobs:
       matrix:
         build: [
           ubuntu,
-          windows,
           macos_arm64,
           macos_x86_64
         ]
@@ -26,8 +25,6 @@ jobs:
             os: macos-latest
           - build: macos_x86_64
             os: macos-13
-          - build: windows
-            os: windows-latest
           - build: ubuntu
             os: ubuntu-latest
     steps:
