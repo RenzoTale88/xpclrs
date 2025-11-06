@@ -13,6 +13,26 @@ use statistical::mean;
 use statrs::distribution::{Binomial, Discrete};
 use std::f64::consts::PI;
 
+// Define data type to return the A1/A2 counts and frequencies
+type AlleleDataTuple = (Vec<u32>, Vec<u64>, Vec<u64>, Vec<f64>, Vec<f64>);
+type RangeTuple<'a> = (
+    Vec<&'a Vec<Genotype>>, 
+    Vec<u32>, 
+    Vec<f64>, 
+    Vec<u64>, 
+    Vec<u64>, 
+    Vec<f64>
+);
+
+struct AlleleFreqs {
+    pub ref_allele: Vec<u32>,
+    pub total_counts1: Vec<u64>,
+    pub alt_counts1: Vec<u64>,
+    pub alt_freqs1: Vec<f64>,
+    pub alt_freqs2: Vec<f64>,
+}
+
+
 // Drafted bisect left and right
 pub struct Bisector<'a, T> {
     data: &'a [T],
@@ -350,15 +370,6 @@ fn get_window(
     }
 }
 
-// Define data type to return the A1/A2 counts and frequencies
-struct AlleleFreqs {
-    pub ref_allele: Vec<u32>,
-    pub total_counts1: Vec<u64>,
-    pub alt_counts1: Vec<u64>,
-    pub alt_freqs1: Vec<f64>,
-    pub alt_freqs2: Vec<f64>,
-}
-
 // Compute A1/A2 counts and A2 frequency
 fn pair_gt_to_af(
     gt1_m: &[Vec<Genotype>],
@@ -398,7 +409,8 @@ fn pair_gt_to_af(
             )
         })
         .collect();
-    let (ref_allele, total_counts1, alt_counts1, alt_freqs1, alt_freqs2): (Vec<u32>, Vec<u64>, Vec<u64>, Vec<f64>, Vec<f64>) = Itertools::multiunzip(vals.into_iter());
+    
+    let (ref_allele, total_counts1, alt_counts1, alt_freqs1, alt_freqs2): AlleleDataTuple = Itertools::multiunzip(vals.into_iter());
     Ok(
         AlleleFreqs {
             ref_allele,
@@ -646,7 +658,7 @@ pub fn xpclr(
                 let bpi = g_data.positions[ix[0]] + 1;
                 let bpe = g_data.positions[max_ix] + 1;
                 // Do not clone, just refer to them
-                let (gt_range, ar_range, gd_range, a1_range, t1_range, p2freqs): (Vec<&Vec<Genotype>>, Vec<u32>, Vec<f64>, Vec<u64>, Vec<u64>, Vec<f64>) = Itertools::multiunzip(ix.iter().map(|&i| (&g_data.gt2[i], &af_data.ref_allele[i], &g_data.gdistances[i], &af_data.alt_counts1[i], &af_data.total_counts1[i], &af_data.alt_freqs2[i])));
+                let (gt_range, ar_range, gd_range, a1_range, t1_range, p2freqs): RangeTuple = Itertools::multiunzip(ix.iter().map(|&i| (&g_data.gt2[i], &af_data.ref_allele[i], &g_data.gdistances[i], &af_data.alt_counts1[i], &af_data.total_counts1[i], &af_data.alt_freqs2[i])));
                 // Compute distances from the average gen. dist.
                 let mdist = mean(&gd_range);
                 let rds = gd_range.iter().map(|d| (d - mdist).abs()).collect::<Vec<f64>>();
