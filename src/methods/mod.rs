@@ -16,12 +16,12 @@ use std::f64::consts::PI;
 // Define data type to return the A1/A2 counts and frequencies
 type AlleleDataTuple = (Vec<u32>, Vec<u64>, Vec<u64>, Vec<f64>, Vec<f64>);
 type RangeTuple<'a> = (
-    Vec<&'a Vec<Genotype>>, 
-    Vec<u32>, 
-    Vec<f64>, 
-    Vec<u64>, 
-    Vec<u64>, 
-    Vec<f64>
+    Vec<&'a Vec<Genotype>>,
+    Vec<u32>,
+    Vec<f64>,
+    Vec<u64>,
+    Vec<u64>,
+    Vec<f64>,
 );
 
 struct AlleleFreqs {
@@ -31,7 +31,6 @@ struct AlleleFreqs {
     pub alt_freqs1: Vec<f64>,
     pub alt_freqs2: Vec<f64>,
 }
-
 
 // Drafted bisect left and right
 pub struct Bisector<'a, T> {
@@ -371,10 +370,7 @@ fn get_window(
 }
 
 // Compute A1/A2 counts and A2 frequency
-fn pair_gt_to_af(
-    gt1_m: &[Vec<Genotype>],
-    gt2_m: &[Vec<Genotype>],
-) -> Result<AlleleFreqs> {
+fn pair_gt_to_af(gt1_m: &[Vec<Genotype>], gt2_m: &[Vec<Genotype>]) -> Result<AlleleFreqs> {
     let vals: Vec<(u32, u64, u64, f64, f64)> = gt1_m
         .iter()
         .zip(gt2_m)
@@ -409,17 +405,16 @@ fn pair_gt_to_af(
             )
         })
         .collect();
-    
-    let (ref_allele, total_counts1, alt_counts1, alt_freqs1, alt_freqs2): AlleleDataTuple = Itertools::multiunzip(vals.into_iter());
-    Ok(
-        AlleleFreqs {
-            ref_allele,
-            total_counts1,
-            alt_counts1,
-            alt_freqs1,
-            alt_freqs2,
-        }
-    )
+
+    let (ref_allele, total_counts1, alt_counts1, alt_freqs1, alt_freqs2): AlleleDataTuple =
+        Itertools::multiunzip(vals.into_iter());
+    Ok(AlleleFreqs {
+        ref_allele,
+        total_counts1,
+        alt_counts1,
+        alt_freqs1,
+        alt_freqs2,
+    })
 }
 
 // Attempt to compute the LD using the same method as scikit-allele
@@ -628,7 +623,7 @@ pub fn xpclr(
     // Get the allele frequencies first
     // (ar, t1, a1, q1, _t2, _a2, q2)
     // (ref_allele, total_counts1, alt_counts1, alt_freqs1, total_counts2, alt_counts2, alt_freqs2)
-    let af_data : AlleleFreqs =
+    let af_data: AlleleFreqs =
         pair_gt_to_af(&g_data.gt1, &g_data.gt2).expect("Failed to copmute the AF for pop 1");
 
     // Then, let's compute the omega
