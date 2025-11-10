@@ -233,7 +233,7 @@ fn main() {
         &chrom,
         start,
         end,
-        (rrate, distkey),
+        (phased, rrate, distkey),
     )
     .expect("Failed to read the VCF/BCF file");
 

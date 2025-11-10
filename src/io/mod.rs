@@ -36,6 +36,45 @@ pub struct GenoData {
     pub gdistances: Vec<f64>,
 }
 
+// Genotypes to counts
+fn gt2gcount(gt: Genotype, ref_ix: u32) -> i8 {
+    // Extract allele indices, ignoring missing
+    let alleles: Vec<u32> = gt
+        .iter()
+        .filter_map(|a| a.index()) // skip missing
+        .collect();
+
+    if alleles.is_empty() {
+        // All missing
+        -9_i8
+    } else {
+        // Count how many are NOT the ref allele
+        let alt_count = alleles.iter().filter(|&&ix| ix != ref_ix).count() as i8;
+
+        if alt_count == 0 {
+            0
+        } else {
+            alt_count
+        }
+    }
+}
+
+// Convert genotypes in the appropriate form
+fn gt2haplotype(gt: Genotype) -> (i8, i8) {
+    let haps =gt.iter()
+        .map(|a| match a {
+            GenotypeAllele::PhasedMissing => -9_i8,
+            GenotypeAllele::UnphasedMissing => -9_i8,
+            _ => a.index().unwrap() as i8,
+        })
+        .collect::<Vec<i8>>();
+    if haps.len() !=2 {
+        (-9_i8, -9_i8)
+    } else {
+        (haps[0], haps[1])
+    }
+}
+
 /// Same as smakcr, but single threaded for now
 pub fn read_xcf<P: AsRef<Path> + Display>(path: P, has_index: bool) -> Result<XcfReader> {
     let xcf_reader: XcfReader = if has_index {
@@ -113,7 +152,7 @@ fn indexed_xcf(
     chrom: &str,
     start: u64,
     end: Option<u64>,
-    (rrate, gdistkey): (Option<f64>, Option<String>),
+    (phased, rrate, gdistkey): (Option<bool>, Option<f64>, Option<String>),
 ) -> Result<GenoData> {
     log::info!("Indexed reader.");
     // Prepare the indexed reader
@@ -264,7 +303,7 @@ fn readthrough_xcf(
     chrom: &str,
     start: u64,
     end: Option<u64>,
-    (rrate, gdistkey): (Option<f64>, Option<String>),
+    (phased, rrate, gdistkey): (Option<bool>, Option<f64>, Option<String>),
 ) -> Result<GenoData> {
     log::info!("Streamed reader.");
     log::info!("This is substantially slower than the indexed one.");
@@ -423,7 +462,7 @@ pub fn process_xcf(
     chrom: &str,
     start: Option<u64>,
     end: Option<u64>,
-    (rrate, gdistkey): (Option<f64>, Option<String>),
+    (phased, rrate, gdistkey): (Option<bool>, Option<f64>, Option<String>),
 ) -> Result<GenoData> {
     // Process the data depending on the presence of the index
     let start = start.unwrap_or(0);
@@ -432,8 +471,8 @@ pub fn process_xcf(
     let csi_path = format!("{xcf_fn}.csi");
     let has_index = Path::exists(Path::new(&tbi_path)) || Path::exists(Path::new(&csi_path));
     let g_data = match has_index {
-        true => indexed_xcf(xcf_fn, s1, s2, chrom, start, end, (rrate, gdistkey)),
-        false => readthrough_xcf(xcf_fn, s1, s2, chrom, start, end, (rrate, gdistkey)),
+        true => indexed_xcf(xcf_fn, s1, s2, chrom, start, end, (phased, rrate, gdistkey)),
+        false => readthrough_xcf(xcf_fn, s1, s2, chrom, start, end, (phased,rrate, gdistkey)),
     }
     .expect("Failed to parse the VCF/BCF file");
     Ok(g_data)

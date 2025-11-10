@@ -52,3 +52,8 @@ Options:
 
 ### Demo data
 Can test with the demo data in the original xpclr repository [here](https://github.com/hardingnj/xpclr/tree/master/fixture).
+
+## Citation
+If you use the tool, please cite:
+> Chen H, Patterson N, Reich D. Population differentiation as a test for selective sweeps. Genome Res. 2010 Mar;20(3):393-402. doi: 10.1101/gr.100545.109. Epub 2010 Jan 19. PMID: 20086244; PMCID: PMC2840981.
+> Talenti A.
