@@ -1,7 +1,7 @@
 # xpclrs
 A rust implementation of the XP-CLR method.
 This implementation achieves near identical results in a fraction of the run time.
-The software analyses chromosome 24 of the VarGoat dataset (777,865 total variants, 236,145 used for the analysis, with two groups of 32 and 22 individuals, respectively) in 00m:26s, versus 55m:20s of the original implementation.
+The software analyses chromosome 24 of the VarGoat dataset (777,865 total variants, 236,145 used for the analysis, with two groups of 32 and 22 individuals, respectively) in 00m:26s and using 77Mb of memory, versus 55m:20s and 321Mb of the original implementation.
 
 ## Installation
 Clone and compile the code:
