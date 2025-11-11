@@ -1,4 +1,4 @@
-use clap::{builder::PossibleValue, value_parser, Arg, Command};
+use clap::{builder::PossibleValue, value_parser, Arg, ArgAction, Command};
 use env_logger::{self, Env};
 use rayon::current_num_threads;
 use xpclrs::{
@@ -116,6 +116,14 @@ fn main() {
                 .default_value("20000")
                 .value_parser(value_parser!(u64))
                 .help("Step size for the sliding windows."),
+        )
+        .arg(
+            Arg::new("PHASED")
+                .long("P")
+                .long("phased")
+                .required(false)
+                .action(ArgAction::SetTrue)
+                .help("Whether data is phased for more precise r2 calculation."),
         )
         .arg(
             Arg::new("CHROM")

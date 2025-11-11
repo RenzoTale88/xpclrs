@@ -35,9 +35,6 @@ pub struct GenoData {
     // -9 = missing, 0/1/2 = alt allele count for diploids
     pub gt1: Vec<Vec<i8>>,
     pub gt2: Vec<Vec<i8>>,
-    // Optional per-site haplotypes for population 2 when phased data is requested.
-    // Each site vector is length 2 * n_samples with allele indices (0/1) and -9 for missing.
-    pub hap2: Option<Vec<Vec<i8>>>,
     pub gdistances: Vec<f64>,
 }
 
@@ -192,7 +189,7 @@ fn indexed_xcf(
     let mut pass = 0;
     let mut skipped = 0;
     let mut tot = 0;
-    let (positions, gt1_data, gt2_data, hap2_data, gd_data): (Vec<_>, Vec<_>, Vec<_>, Vec<_>, Vec<_>) = reader
+    let (positions, gt1_data, gt2_data, gd_data): (Vec<_>, Vec<_>, Vec<_>, Vec<_>) = reader
         .records()
         .filter_map(|r| {
             let record = r.ok()?;
@@ -258,9 +255,14 @@ fn indexed_xcf(
                     .keys()
                     .min()
                     .expect("Can't compute reference allele index");
-                // If phased requested, also build haplotypes for pop2 before consuming gt2_g
-                let hap2 = if phased.unwrap_or(false) {
-                    let h: Vec<i8> = gt2_g
+                // Encode genotypes to compact i8 counts relative to ref allele
+                let gt1 = gt1_g
+                    .into_iter()
+                    .map(|gt| gt2gcount(gt, ref_ix))
+                    .collect::<Vec<i8>>();
+                // If phased, store haplotypes in gt2; else store dosages
+                let gt2 = if phased.unwrap_or(false) {
+                    gt2_g
                         .iter()
                         .flat_map(|gt| {
                             gt.iter().map(|a| match a {
@@ -269,21 +271,14 @@ fn indexed_xcf(
                                 _ => a.index().unwrap() as i8,
                             })
                         })
-                        .collect();
-                    Some(h)
+                        .collect::<Vec<i8>>()
                 } else {
-                    None
+                    gt2_g
+                        .into_iter()
+                        .map(|gt| gt2gcount(gt, ref_ix))
+                        .collect::<Vec<i8>>()
                 };
-                // Encode genotypes to compact i8 counts relative to ref allele
-                let gt1 = gt1_g
-                    .into_iter()
-                    .map(|gt| gt2gcount(gt, ref_ix))
-                    .collect::<Vec<i8>>();
-                let gt2 = gt2_g
-                    .into_iter()
-                    .map(|gt| gt2gcount(gt, ref_ix))
-                    .collect::<Vec<i8>>();
-                Some((record.pos() as usize, gt1, gt2, hap2, gd))
+                Some((record.pos() as usize, gt1, gt2, gd))
             }
         })
         .multiunzip();
@@ -313,11 +308,6 @@ fn indexed_xcf(
         positions,
         gt1: gt1_data,
         gt2: gt2_data,
-        hap2: if phased.unwrap_or(false) {
-            Some(hap2_data.into_iter().map(|v: Option<Vec<i8>>| v.unwrap_or_default()).collect())
-        } else {
-            None
-        },
         gdistances: gd_data,
     })
 }
@@ -379,7 +369,7 @@ fn readthrough_xcf(
     let mut pass = 0;
     let mut skipped = 0;
     let mut tot = 0;
-    let (positions, gt1_data, gt2_data, hap2_data, gd_data): (Vec<_>, Vec<_>, Vec<_>, Vec<_>, Vec<_>) = reader
+    let (positions, gt1_data, gt2_data, gd_data): (Vec<_>, Vec<_>, Vec<_>, Vec<_>) = reader
         .records()
         .filter(|r| {
             let record = r.as_ref().unwrap();
@@ -451,9 +441,14 @@ fn readthrough_xcf(
                     .keys()
                     .min()
                     .expect("Can't compute reference allele index");
-                // If phased requested, also build haplotypes for pop2 before consuming gt2_g
-                let hap2 = if phased.unwrap_or(false) {
-                    let h: Vec<i8> = gt2_g
+                // Encode genotypes to compact i8 counts relative to ref allele
+                let gt1 = gt1_g
+                    .into_iter()
+                    .map(|gt| gt2gcount(gt, ref_ix))
+                    .collect::<Vec<i8>>();
+                // If phased, store haplotypes in gt2; else store dosages
+                let gt2 = if phased.unwrap_or(false) {
+                    gt2_g
                         .iter()
                         .flat_map(|gt| {
                             gt.iter().map(|a| match a {
@@ -462,21 +457,14 @@ fn readthrough_xcf(
                                 _ => a.index().unwrap() as i8,
                             })
                         })
-                        .collect();
-                    Some(h)
+                        .collect::<Vec<i8>>()
                 } else {
-                    None
+                    gt2_g
+                        .into_iter()
+                        .map(|gt| gt2gcount(gt, ref_ix))
+                        .collect::<Vec<i8>>()
                 };
-                // Encode genotypes to compact i8 counts relative to ref allele
-                let gt1 = gt1_g
-                    .into_iter()
-                    .map(|gt| gt2gcount(gt, ref_ix))
-                    .collect::<Vec<i8>>();
-                let gt2 = gt2_g
-                    .into_iter()
-                    .map(|gt| gt2gcount(gt, ref_ix))
-                    .collect::<Vec<i8>>();
-                Some((record.pos() as usize, gt1, gt2, hap2, gd))
+                Some((record.pos() as usize, gt1, gt2, gd))
             }
         })
         .multiunzip();
@@ -507,11 +495,6 @@ fn readthrough_xcf(
         positions,
         gt1: gt1_data,
         gt2: gt2_data,
-        hap2: if phased.unwrap_or(false) {
-            Some(hap2_data.into_iter().map(|v: Option<Vec<i8>>| v.unwrap_or_default()).collect())
-        } else {
-            None
-        },
         gdistances: gd_data,
     })
 }

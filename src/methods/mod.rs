@@ -366,19 +366,27 @@ fn pair_gt_to_af(gt1_m: &[Vec<i8>], gt2_m: &[Vec<i8>], phased: Option<bool>) -> 
         .zip(gt2_m)
         .map(|(gts1, gts2)| {
             let non_missing1 = gts1.iter().filter(|v| **v >= 0).count() as u64;
-            let non_missing2 = gts2.iter().filter(|v| **v >= 0).count() as u64;
-            let tot_counts1 = 2 * non_missing1; // diploid
-            let tot_counts2 = 2 * non_missing2; // diploid
+            let tot_counts1 = 2 * non_missing1; // diploid dosages for pop1
+            let is_phased = phased.unwrap_or(false);
+            let tot_counts2 = if is_phased {
+                // haplotype vector length is 2*n_samples; total allele count is number of non-missing haplotypes
+                gts2.iter().filter(|v| **v >= 0).count() as u64
+            } else {
+                // dosage vector; total allele count = 2 * non-missing samples
+                2 * (gts2.iter().filter(|v| **v >= 0).count() as u64)
+            };
             let alt_counts1 = gts1
                 .iter()
                 .filter(|v| **v >= 0)
                 .map(|&v| v as u64)
                 .sum::<u64>() as f64;
-            let alt_counts2 = gts2
-                .iter()
-                .filter(|v| **v >= 0)
-                .map(|&v| v as u64)
-                .sum::<u64>() as f64;
+            let alt_counts2 = if is_phased {
+                // haplotypes: entries are 0/1; sum directly
+                gts2.iter().filter(|v| **v >= 0).map(|&v| v as u64).sum::<u64>() as f64
+            } else {
+                // dosages: entries are 0/1/2; sum directly
+                gts2.iter().filter(|v| **v >= 0).map(|&v| v as u64).sum::<u64>() as f64
+            };
             (tot_counts1, alt_counts1 as u64, alt_counts1 / (tot_counts1 as f64), alt_counts2 / (tot_counts2 as f64))
         })
         .collect();
@@ -541,7 +549,7 @@ pub fn xpclr(
 
     // Get the allele frequencies first
     // (ar, t1, a1, q1, _t2, _a2, q2)
-    // (ref_allele, total_counts1, alt_counts1, alt_freqs1, total_counts2, alt_counts2, alt_freqs2)
+    // (total_counts1, alt_counts1, alt_freqs1, alt_freqs2)
     let af_data: AlleleFreqs =
         pair_gt_to_af(&g_data.gt1, &g_data.gt2, phased).expect("Failed to copmute the AF for pop 1");
 
@@ -571,15 +579,9 @@ pub fn xpclr(
             } else {
                 let bpi = g_data.positions[ix[0]] + 1;
                 let bpe = g_data.positions[max_ix] + 1;
-                // Do not clone, just refer to them (use haplotypes if available, else dosages)
-                let use_haps = g_data.hap2.is_some();
+                // Do not clone, just refer to them (gt2 holds haplotypes when phased, dosages otherwise)
                 let (gt_range, gd_range, a1_range, t1_range, p2freqs): RangeTuple =
-                    if use_haps {
-                        let hap2 = g_data.hap2.as_ref().unwrap();
-                        Itertools::multiunzip(ix.iter().map(|&i| (&hap2[i], &g_data.gdistances[i], &af_data.alt_counts1[i], &af_data.total_counts1[i], &af_data.alt_freqs2[i])))
-                    } else {
-                        Itertools::multiunzip(ix.iter().map(|&i| (&g_data.gt2[i], &g_data.gdistances[i], &af_data.alt_counts1[i], &af_data.total_counts1[i], &af_data.alt_freqs2[i])))
-                    };
+                    Itertools::multiunzip(ix.iter().map(|&i| (&g_data.gt2[i], &g_data.gdistances[i], &af_data.alt_counts1[i], &af_data.total_counts1[i], &af_data.alt_freqs2[i])));
                 // Compute distances from the average gen. dist.
                 let mdist = mean(&gd_range);
                 let rds = gd_range.iter().map(|d| (d - mdist).abs()).collect::<Vec<f64>>();
