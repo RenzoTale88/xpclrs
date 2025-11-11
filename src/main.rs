@@ -119,7 +119,7 @@ fn main() {
         )
         .arg(
             Arg::new("PHASED")
-                .short("P")
+                .short('P')
                 .long("phased")
                 .required(false)
                 .action(ArgAction::SetTrue)
