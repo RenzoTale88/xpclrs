@@ -261,7 +261,6 @@ fn main() {
             g_data,
             windows,
             ldcutoff,
-            phased,
             maxsnps as usize,
             minsnps as usize,
         )

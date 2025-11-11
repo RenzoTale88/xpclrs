@@ -31,8 +31,13 @@ pub enum XcfReader {
 // Genotype data structure
 pub struct GenoData {
     pub positions: Vec<usize>,
-    pub gt1: Vec<Vec<Genotype>>,
-    pub gt2: Vec<Vec<Genotype>>,
+    // Per-site, per-sample alternate allele counts encoded as i8:
+    // -9 = missing, 0/1/2 = alt allele count for diploids
+    pub gt1: Vec<Vec<i8>>,
+    pub gt2: Vec<Vec<i8>>,
+    // Optional per-site haplotypes for population 2 when phased data is requested.
+    // Each site vector is length 2 * n_samples with allele indices (0/1) and -9 for missing.
+    pub hap2: Option<Vec<Vec<i8>>>,
     pub gdistances: Vec<f64>,
 }
 
@@ -60,20 +65,7 @@ fn gt2gcount(gt: Genotype, ref_ix: u32) -> i8 {
 }
 
 // Convert genotypes in the appropriate form
-fn gt2haplotype(gt: Genotype) -> (i8, i8) {
-    let haps =gt.iter()
-        .map(|a| match a {
-            GenotypeAllele::PhasedMissing => -9_i8,
-            GenotypeAllele::UnphasedMissing => -9_i8,
-            _ => a.index().unwrap() as i8,
-        })
-        .collect::<Vec<i8>>();
-    if haps.len() !=2 {
-        (-9_i8, -9_i8)
-    } else {
-        (haps[0], haps[1])
-    }
-}
+// (Phased haplotype conversion not used with compact storage)
 
 /// Same as smakcr, but single threaded for now
 pub fn read_xcf<P: AsRef<Path> + Display>(path: P, has_index: bool) -> Result<XcfReader> {
@@ -200,27 +192,27 @@ fn indexed_xcf(
     let mut pass = 0;
     let mut skipped = 0;
     let mut tot = 0;
-    let (positions, gt1_data, gt2_data, gd_data): (Vec<_>, Vec<_>, Vec<_>, Vec<_>) = reader
+    let (positions, gt1_data, gt2_data, hap2_data, gd_data): (Vec<_>, Vec<_>, Vec<_>, Vec<_>, Vec<_>) = reader
         .records()
         .filter_map(|r| {
             let record = r.ok()?;
             tot += 1;
             let genotypes = record.genotypes().expect("Cannot fetch the genotypes");
-            let gt1 = i1
+            let gt1_g = i1
                 .iter()
                 .map(|i| genotypes.get(*i))
                 .collect::<Vec<Genotype>>();
-            let gt2 = i2
+            let gt2_g = i2
                 .iter()
                 .map(|i| genotypes.get(*i))
                 .collect::<Vec<Genotype>>();
             // Check that the site is biallelic
-            let alleles1: Counter<u32> = gt1
+            let alleles1: Counter<u32> = gt1_g
                 .iter()
                 .flat_map(|g| g.iter().filter_map(|&a: &GenotypeAllele| a.index()))
                 .collect::<Counter<u32>>();
 
-            let alleles2: Counter<u32> = gt2
+            let alleles2: Counter<u32> = gt2_g
                 .iter()
                 .flat_map(|g| g.iter().filter_map(|a| a.index()))
                 .collect::<Counter<u32>>();
@@ -261,7 +253,37 @@ fn indexed_xcf(
                 None
             } else {
                 pass += 1;
-                Some((record.pos() as usize, gt1, gt2, gd))
+                // Define reference allele as the minimum allele index (consistent with methods)
+                let ref_ix = *all_alleles
+                    .keys()
+                    .min()
+                    .expect("Can't compute reference allele index");
+                // If phased requested, also build haplotypes for pop2 before consuming gt2_g
+                let hap2 = if phased.unwrap_or(false) {
+                    let h: Vec<i8> = gt2_g
+                        .iter()
+                        .flat_map(|gt| {
+                            gt.iter().map(|a| match a {
+                                GenotypeAllele::PhasedMissing => -9_i8,
+                                GenotypeAllele::UnphasedMissing => -9_i8,
+                                _ => a.index().unwrap() as i8,
+                            })
+                        })
+                        .collect();
+                    Some(h)
+                } else {
+                    None
+                };
+                // Encode genotypes to compact i8 counts relative to ref allele
+                let gt1 = gt1_g
+                    .into_iter()
+                    .map(|gt| gt2gcount(gt, ref_ix))
+                    .collect::<Vec<i8>>();
+                let gt2 = gt2_g
+                    .into_iter()
+                    .map(|gt| gt2gcount(gt, ref_ix))
+                    .collect::<Vec<i8>>();
+                Some((record.pos() as usize, gt1, gt2, hap2, gd))
             }
         })
         .multiunzip();
@@ -291,6 +313,11 @@ fn indexed_xcf(
         positions,
         gt1: gt1_data,
         gt2: gt2_data,
+        hap2: if phased.unwrap_or(false) {
+            Some(hap2_data.into_iter().map(|v: Option<Vec<i8>>| v.unwrap_or_default()).collect())
+        } else {
+            None
+        },
         gdistances: gd_data,
     })
 }
@@ -352,7 +379,7 @@ fn readthrough_xcf(
     let mut pass = 0;
     let mut skipped = 0;
     let mut tot = 0;
-    let (positions, gt1_data, gt2_data, gd_data): (Vec<_>, Vec<_>, Vec<_>, Vec<_>) = reader
+    let (positions, gt1_data, gt2_data, hap2_data, gd_data): (Vec<_>, Vec<_>, Vec<_>, Vec<_>, Vec<_>) = reader
         .records()
         .filter(|r| {
             let record = r.as_ref().unwrap();
@@ -363,22 +390,22 @@ fn readthrough_xcf(
             let record = r.ok()?;
             tot += 1;
             let genotypes = record.genotypes().expect("Cannot fetch the genotypes");
-            let gt1 = i1
+            let gt1_g = i1
                 .iter()
                 .map(|i| genotypes.get(*i))
                 .collect::<Vec<Genotype>>();
-            let gt2 = i2
+            let gt2_g = i2
                 .iter()
                 .map(|i| genotypes.get(*i))
                 .collect::<Vec<Genotype>>();
 
             // Check that the site is biallelic
-            let alleles1: Counter<u32> = gt1
+            let alleles1: Counter<u32> = gt1_g
                 .iter()
                 .flat_map(|g| g.iter().filter_map(|&a: &GenotypeAllele| a.index()))
                 .collect::<Counter<u32>>();
 
-            let alleles2: Counter<u32> = gt2
+            let alleles2: Counter<u32> = gt2_g
                 .iter()
                 .flat_map(|g| g.iter().filter_map(|a| a.index()))
                 .collect::<Counter<u32>>();
@@ -419,7 +446,37 @@ fn readthrough_xcf(
                 None
             } else {
                 pass += 1;
-                Some((record.pos() as usize, gt1, gt2, gd))
+                // Define reference allele as the minimum allele index
+                let ref_ix = *all_alleles
+                    .keys()
+                    .min()
+                    .expect("Can't compute reference allele index");
+                // If phased requested, also build haplotypes for pop2 before consuming gt2_g
+                let hap2 = if phased.unwrap_or(false) {
+                    let h: Vec<i8> = gt2_g
+                        .iter()
+                        .flat_map(|gt| {
+                            gt.iter().map(|a| match a {
+                                GenotypeAllele::PhasedMissing => -9_i8,
+                                GenotypeAllele::UnphasedMissing => -9_i8,
+                                _ => a.index().unwrap() as i8,
+                            })
+                        })
+                        .collect();
+                    Some(h)
+                } else {
+                    None
+                };
+                // Encode genotypes to compact i8 counts relative to ref allele
+                let gt1 = gt1_g
+                    .into_iter()
+                    .map(|gt| gt2gcount(gt, ref_ix))
+                    .collect::<Vec<i8>>();
+                let gt2 = gt2_g
+                    .into_iter()
+                    .map(|gt| gt2gcount(gt, ref_ix))
+                    .collect::<Vec<i8>>();
+                Some((record.pos() as usize, gt1, gt2, hap2, gd))
             }
         })
         .multiunzip();
@@ -450,6 +507,11 @@ fn readthrough_xcf(
         positions,
         gt1: gt1_data,
         gt2: gt2_data,
+        hap2: if phased.unwrap_or(false) {
+            Some(hap2_data.into_iter().map(|v: Option<Vec<i8>>| v.unwrap_or_default()).collect())
+        } else {
+            None
+        },
         gdistances: gd_data,
     })
 }
