@@ -517,7 +517,7 @@ pub fn process_xcf(
     let has_index = Path::exists(Path::new(&tbi_path)) || Path::exists(Path::new(&csi_path));
     let g_data = match has_index {
         true => indexed_xcf(xcf_fn, s1, s2, chrom, start, end, (phased, rrate, gdistkey)),
-        false => readthrough_xcf(xcf_fn, s1, s2, chrom, start, end, (phased,rrate, gdistkey)),
+        false => readthrough_xcf(xcf_fn, s1, s2, chrom, start, end, (phased, rrate, gdistkey)),
     }
     .expect("Failed to parse the VCF/BCF file");
     Ok(g_data)

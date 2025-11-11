@@ -360,7 +360,11 @@ fn get_window(
 }
 
 // Compute A1/A2 counts and A2 frequency from compact i8 dosages (-9 missing, 0/1/2 alt counts)
-fn pair_gt_to_af(gt1_m: &[Vec<i8>], gt2_m: &[Vec<i8>], phased: Option<bool>) -> Result<AlleleFreqs> {
+fn pair_gt_to_af(
+    gt1_m: &[Vec<i8>],
+    gt2_m: &[Vec<i8>],
+    phased: Option<bool>,
+) -> Result<AlleleFreqs> {
     let vals: Vec<(u64, u64, f64, f64)> = gt1_m
         .iter()
         .zip(gt2_m)
@@ -382,12 +386,23 @@ fn pair_gt_to_af(gt1_m: &[Vec<i8>], gt2_m: &[Vec<i8>], phased: Option<bool>) -> 
                 .sum::<u64>() as f64;
             let alt_counts2 = if is_phased {
                 // haplotypes: entries are 0/1; sum directly
-                gts2.iter().filter(|v| **v >= 0).map(|&v| v as u64).sum::<u64>() as f64
+                gts2.iter()
+                    .filter(|v| **v >= 0)
+                    .map(|&v| v as u64)
+                    .sum::<u64>() as f64
             } else {
                 // dosages: entries are 0/1/2; sum directly
-                gts2.iter().filter(|v| **v >= 0).map(|&v| v as u64).sum::<u64>() as f64
+                gts2.iter()
+                    .filter(|v| **v >= 0)
+                    .map(|&v| v as u64)
+                    .sum::<u64>() as f64
             };
-            (tot_counts1, alt_counts1 as u64, alt_counts1 / (tot_counts1 as f64), alt_counts2 / (tot_counts2 as f64))
+            (
+                tot_counts1,
+                alt_counts1 as u64,
+                alt_counts1 / (tot_counts1 as f64),
+                alt_counts2 / (tot_counts2 as f64),
+            )
         })
         .collect();
 
@@ -493,10 +508,7 @@ fn apply_cutoff(matrix: &[Vec<f64>], cutoff: f64) -> Vec<Vec<bool>> {
 }
 
 // Compute the variant weight
-fn compute_weights(
-    gt_m: Vec<&Vec<i8>>,
-    ldcutoff: f64,
-) -> Result<Vec<f64>> {
+fn compute_weights(gt_m: Vec<&Vec<i8>>, ldcutoff: f64) -> Result<Vec<f64>> {
     // Create a temporary owned matrix to feed into the LD computation
     let d: Vec<Vec<i8>> = gt_m.iter().map(|row| row.to_vec()).collect();
     // Compute the R2
@@ -550,8 +562,8 @@ pub fn xpclr(
     // Get the allele frequencies first
     // (ar, t1, a1, q1, _t2, _a2, q2)
     // (total_counts1, alt_counts1, alt_freqs1, alt_freqs2)
-    let af_data: AlleleFreqs =
-        pair_gt_to_af(&g_data.gt1, &g_data.gt2, phased).expect("Failed to copmute the AF for pop 1");
+    let af_data: AlleleFreqs = pair_gt_to_af(&g_data.gt1, &g_data.gt2, phased)
+        .expect("Failed to copmute the AF for pop 1");
 
     // Then, let's compute the omega
     let w = est_omega(&af_data.alt_freqs1, &af_data.alt_freqs2).expect("Cannot compute omega");
