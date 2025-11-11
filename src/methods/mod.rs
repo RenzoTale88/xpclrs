@@ -3,29 +3,19 @@ This module provides the functions required to compute the XP-CLR.
 */
 use crate::io::GenoData;
 use anyhow::Result;
-use counter::Counter;
 use itertools::Itertools;
 use rand::prelude::IndexedRandom;
 use rayon::prelude::*;
-use rust_htslib::bcf::record::{Genotype, GenotypeAllele};
 use scirs2_integrate::gaussian::gauss_kronrod21;
 use statistical::mean;
 use statrs::distribution::{Binomial, Discrete};
 use std::f64::consts::PI;
 
 // Define data type to return the A1/A2 counts and frequencies
-type AlleleDataTuple = (Vec<u32>, Vec<u64>, Vec<u64>, Vec<f64>, Vec<f64>);
-type RangeTuple<'a> = (
-    Vec<&'a Vec<Genotype>>,
-    Vec<u32>,
-    Vec<f64>,
-    Vec<u64>,
-    Vec<u64>,
-    Vec<f64>,
-);
+type AlleleDataTuple = (Vec<u64>, Vec<u64>, Vec<f64>, Vec<f64>);
+type RangeTuple<'a> = (Vec<&'a Vec<i8>>, Vec<f64>, Vec<u64>, Vec<u64>, Vec<f64>);
 
 struct AlleleFreqs {
-    pub ref_allele: Vec<u32>,
     pub total_counts1: Vec<u64>,
     pub alt_counts1: Vec<u64>,
     pub alt_freqs1: Vec<f64>,
@@ -369,47 +359,41 @@ fn get_window(
     }
 }
 
-// Compute A1/A2 counts and A2 frequency
-fn pair_gt_to_af(gt1_m: &[Vec<Genotype>], gt2_m: &[Vec<Genotype>]) -> Result<AlleleFreqs> {
-    let vals: Vec<(u32, u64, u64, f64, f64)> = gt1_m
+// Compute A1/A2 counts and A2 frequency from compact i8 dosages (-9 missing, 0/1/2 alt counts)
+fn pair_gt_to_af(gt1_m: &[Vec<i8>], gt2_m: &[Vec<i8>], phased: Option<bool>) -> Result<AlleleFreqs> {
+    let vals: Vec<(u64, u64, f64, f64)> = gt1_m
         .iter()
         .zip(gt2_m)
         .map(|(gts1, gts2)| {
-            let counts1 = gts1
+            let non_missing1 = gts1.iter().filter(|v| **v >= 0).count() as u64;
+            let tot_counts1 = 2 * non_missing1; // diploid dosages for pop1
+            let is_phased = phased.unwrap_or(false);
+            let tot_counts2 = if is_phased {
+                // haplotype vector length is 2*n_samples; total allele count is number of non-missing haplotypes
+                gts2.iter().filter(|v| **v >= 0).count() as u64
+            } else {
+                // dosage vector; total allele count = 2 * non-missing samples
+                2 * (gts2.iter().filter(|v| **v >= 0).count() as u64)
+            };
+            let alt_counts1 = gts1
                 .iter()
-                .flat_map(|gt| gt.iter().filter_map(|a| a.index()))
-                .collect::<Counter<u32>>();
-            let counts2 = gts2
-                .iter()
-                .flat_map(|gt| gt.iter().filter_map(|a| a.index()))
-                .collect::<Counter<u32>>();
-            let mut all_alleles: Counter<_> = counts1.clone();
-            all_alleles.extend(&counts2);
-
-            let ref_allele = all_alleles
-                .keys()
-                .min()
-                .expect("Can't compute the alt allele count");
-            let tot_counts1: usize = counts1.values().sum();
-            let tot_counts2: usize = counts2.values().sum();
-            let ref_counts1 = counts1.get(ref_allele).unwrap_or(&0);
-            let ref_counts2 = counts2.get(ref_allele).unwrap_or(&0);
-            let alt_counts1 = (tot_counts1 - ref_counts1) as f64;
-            let alt_counts2 = (tot_counts2 - ref_counts2) as f64;
-            (
-                *ref_allele,
-                tot_counts1 as u64,
-                alt_counts1 as u64,
-                alt_counts1 / (tot_counts1 as f64),
-                alt_counts2 / (tot_counts2 as f64),
-            )
+                .filter(|v| **v >= 0)
+                .map(|&v| v as u64)
+                .sum::<u64>() as f64;
+            let alt_counts2 = if is_phased {
+                // haplotypes: entries are 0/1; sum directly
+                gts2.iter().filter(|v| **v >= 0).map(|&v| v as u64).sum::<u64>() as f64
+            } else {
+                // dosages: entries are 0/1/2; sum directly
+                gts2.iter().filter(|v| **v >= 0).map(|&v| v as u64).sum::<u64>() as f64
+            };
+            (tot_counts1, alt_counts1 as u64, alt_counts1 / (tot_counts1 as f64), alt_counts2 / (tot_counts2 as f64))
         })
         .collect();
 
-    let (ref_allele, total_counts1, alt_counts1, alt_freqs1, alt_freqs2): AlleleDataTuple =
+    let (total_counts1, alt_counts1, alt_freqs1, alt_freqs2): AlleleDataTuple =
         Itertools::multiunzip(vals.into_iter());
     Ok(AlleleFreqs {
-        ref_allele,
         total_counts1,
         alt_counts1,
         alt_freqs1,
@@ -490,56 +474,7 @@ fn gn_corrcoef_int8(a: &[i8], b: &[i8], a_sq: &[i8], b_sq: &[i8]) -> f64 {
     cov / (v0 * v1).sqrt()
 }
 
-// Convert genotypes in the appropriate form
-fn gt2haplotypes(gt_m: Vec<&Vec<Genotype>>) -> Vec<Vec<i8>> {
-    gt_m.iter()
-        .map(|gts| {
-            gts.iter()
-                .flat_map(|gt| {
-                    gt.iter()
-                        .map(|a| match a {
-                            GenotypeAllele::PhasedMissing => -9_i8,
-                            GenotypeAllele::UnphasedMissing => -9_i8,
-                            _ => a.index().unwrap() as i8,
-                        })
-                        .collect::<Vec<i8>>()
-                })
-                .collect::<Vec<i8>>()
-        })
-        .collect::<Vec<Vec<i8>>>()
-}
-
-// Genotypes to counts
-fn gt2gcounts(gt_m: Vec<&Vec<Genotype>>, ref_all: Vec<u32>) -> Vec<Vec<i8>> {
-    gt_m.iter()
-        .zip(ref_all.iter()) // iter over (Vec<Genotype>, &u32 ref allele index)
-        .map(|(gts, &ref_ix)| {
-            gts.iter()
-                .map(|gt| {
-                    // Extract allele indices, ignoring missing
-                    let alleles: Vec<u32> = gt
-                        .iter()
-                        .filter_map(|a| a.index()) // skip missing
-                        .collect();
-
-                    if alleles.is_empty() {
-                        // All missing
-                        -9_i8
-                    } else {
-                        // Count how many are NOT the ref allele
-                        let alt_count = alleles.iter().filter(|&&ix| ix != ref_ix).count() as i8;
-
-                        if alt_count == 0 {
-                            0
-                        } else {
-                            alt_count
-                        }
-                    }
-                })
-                .collect()
-        })
-        .collect()
-}
+// (Removed Genotype-to-i8 conversions; we operate on compact i8 data directly)
 
 // LD cutoff
 fn apply_cutoff(matrix: &[Vec<f64>], cutoff: f64) -> Vec<Vec<bool>> {
@@ -559,18 +494,11 @@ fn apply_cutoff(matrix: &[Vec<f64>], cutoff: f64) -> Vec<Vec<bool>> {
 
 // Compute the variant weight
 fn compute_weights(
-    gt_m: Vec<&Vec<Genotype>>,
-    ref_all: Vec<u32>,
+    gt_m: Vec<&Vec<i8>>,
     ldcutoff: f64,
-    isphased: bool,
 ) -> Result<Vec<f64>> {
-    // First create a matrix that can be used to compute the LD
-    let d = if isphased {
-        gt2haplotypes(gt_m)
-    } else {
-        gt2gcounts(gt_m, ref_all)
-    };
-
+    // Create a temporary owned matrix to feed into the LD computation
+    let d: Vec<Vec<i8>> = gt_m.iter().map(|row| row.to_vec()).collect();
     // Compute the R2
     let ld = gn_pairwise_corrcoef_int8(&d).expect("Cannot compute LD");
 
@@ -608,9 +536,9 @@ pub fn xpclr(
     g_data: GenoData,
     windows: Vec<(usize, usize)>, // Windows
     ldcutoff: Option<f64>,
-    phased: Option<bool>, // LD-related
     maxsnps: usize,
     minsnps: usize, // Size/count filters
+    phased: Option<bool>,
 ) -> Result<Vec<(usize, XPCLRResult)>> {
     let sel_coeffs = vec![
         0.0, 0.00001, 0.00005, 0.0001, 0.0002, 0.0004, 0.0006, 0.0008, 0.001, 0.003, 0.005, 0.01,
@@ -618,13 +546,12 @@ pub fn xpclr(
     ];
 
     let ldcutoff = ldcutoff.unwrap_or(0.95f64);
-    let isphased = phased.unwrap_or(false);
 
     // Get the allele frequencies first
     // (ar, t1, a1, q1, _t2, _a2, q2)
-    // (ref_allele, total_counts1, alt_counts1, alt_freqs1, total_counts2, alt_counts2, alt_freqs2)
+    // (total_counts1, alt_counts1, alt_freqs1, alt_freqs2)
     let af_data: AlleleFreqs =
-        pair_gt_to_af(&g_data.gt1, &g_data.gt2).expect("Failed to copmute the AF for pop 1");
+        pair_gt_to_af(&g_data.gt1, &g_data.gt2, phased).expect("Failed to copmute the AF for pop 1");
 
     // Then, let's compute the omega
     let w = est_omega(&af_data.alt_freqs1, &af_data.alt_freqs2).expect("Cannot compute omega");
@@ -652,14 +579,15 @@ pub fn xpclr(
             } else {
                 let bpi = g_data.positions[ix[0]] + 1;
                 let bpe = g_data.positions[max_ix] + 1;
-                // Do not clone, just refer to them
-                let (gt_range, ar_range, gd_range, a1_range, t1_range, p2freqs): RangeTuple = Itertools::multiunzip(ix.iter().map(|&i| (&g_data.gt2[i], &af_data.ref_allele[i], &g_data.gdistances[i], &af_data.alt_counts1[i], &af_data.total_counts1[i], &af_data.alt_freqs2[i])));
+                // Do not clone, just refer to them (gt2 holds haplotypes when phased, dosages otherwise)
+                let (gt_range, gd_range, a1_range, t1_range, p2freqs): RangeTuple =
+                    Itertools::multiunzip(ix.iter().map(|&i| (&g_data.gt2[i], &g_data.gdistances[i], &af_data.alt_counts1[i], &af_data.total_counts1[i], &af_data.alt_freqs2[i])));
                 // Compute distances from the average gen. dist.
                 let mdist = mean(&gd_range);
                 let rds = gd_range.iter().map(|d| (d - mdist).abs()).collect::<Vec<f64>>();
 
                 // Compute the weights
-                let weights = compute_weights(gt_range, ar_range, ldcutoff, isphased).expect("Failed to compute the weights");
+                let weights = compute_weights(gt_range, ldcutoff).expect("Failed to compute the weights");
                 let omegas = vec![w; rds.len()];
                 // Compute XP-CLR
                 log::debug!("P2freqs {start} {stop} {} {p2freqs:?}", p2freqs.len());
