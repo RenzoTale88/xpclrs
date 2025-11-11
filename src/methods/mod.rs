@@ -360,7 +360,7 @@ fn get_window(
 }
 
 // Compute A1/A2 counts and A2 frequency from compact i8 dosages (-9 missing, 0/1/2 alt counts)
-fn pair_gt_to_af(gt1_m: &[Vec<i8>], gt2_m: &[Vec<i8>]) -> Result<AlleleFreqs> {
+fn pair_gt_to_af(gt1_m: &[Vec<i8>], gt2_m: &[Vec<i8>], phased: Option<bool>) -> Result<AlleleFreqs> {
     let vals: Vec<(u64, u64, f64, f64)> = gt1_m
         .iter()
         .zip(gt2_m)
@@ -530,6 +530,7 @@ pub fn xpclr(
     ldcutoff: Option<f64>,
     maxsnps: usize,
     minsnps: usize, // Size/count filters
+    phased: Option<bool>,
 ) -> Result<Vec<(usize, XPCLRResult)>> {
     let sel_coeffs = vec![
         0.0, 0.00001, 0.00005, 0.0001, 0.0002, 0.0004, 0.0006, 0.0008, 0.001, 0.003, 0.005, 0.01,
@@ -542,7 +543,7 @@ pub fn xpclr(
     // (ar, t1, a1, q1, _t2, _a2, q2)
     // (ref_allele, total_counts1, alt_counts1, alt_freqs1, total_counts2, alt_counts2, alt_freqs2)
     let af_data: AlleleFreqs =
-        pair_gt_to_af(&g_data.gt1, &g_data.gt2).expect("Failed to copmute the AF for pop 1");
+        pair_gt_to_af(&g_data.gt1, &g_data.gt2, phased).expect("Failed to copmute the AF for pop 1");
 
     // Then, let's compute the omega
     let w = est_omega(&af_data.alt_freqs1, &af_data.alt_freqs2).expect("Cannot compute omega");

@@ -263,6 +263,7 @@ fn main() {
             ldcutoff,
             maxsnps as usize,
             minsnps as usize,
+            phased
         )
         .expect("Failed running the XP-CLR function");
         // Write output
