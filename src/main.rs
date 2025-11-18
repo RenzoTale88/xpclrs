@@ -21,7 +21,7 @@ fn main() {
     let matches = Command::new("xpclr")
         .version(version)
         .author("Andrea Talenti <andrea.talenti@ed.ac.uk>")
-        .about("Compute the XP-CLR for a pair of populations from a VCF file.")
+        .about("Compute the XP-CLR for a pair of populations from a VCF file.\nMethods presented by Chen H, Patterson N, Reich D. Population differentiation as a test for selective sweeps. Genome Res. 2010 Mar;20(3):393-402. doi: 10.1101/gr.100545.109. Epub 2010 Jan 19. PMID: 20086244; PMCID: PMC2840981.\nOriginal implementation is available at https://github.com/hardingnj/xpclr/\n")
         .arg(
             Arg::new("VCF")
                 .short('I')
