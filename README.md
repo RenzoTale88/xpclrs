@@ -3,6 +3,8 @@ A rust implementation of the XP-CLR method.
 This implementation achieves near identical results in a fraction of the run time.
 The software analyses chromosome 24 of the VarGoat dataset (777,865 total variants, 236,145 used for the analysis, with two groups of 32 and 22 individuals, respectively) in 00m:26s and using 77Mb of memory, versus 55m:20s and 321Mb of the original implementation.
 
+> *NOTE*: The software is still under active development, and is not entirely bug free. There are small differences in the results obtained with the original tool.
+
 
 ## Installation
 The compilation of the software requires the following packages to be installed:
