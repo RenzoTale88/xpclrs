@@ -39,7 +39,7 @@ jobs:
 
     - name: Windows deps
       if: matrix.os == 'windows-latest'
-      run: choco install openssl curl openblas
+      run: choco install openssl curl
 
     - name: Build
       run: cargo build --verbose
