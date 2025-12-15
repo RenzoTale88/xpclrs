@@ -182,7 +182,6 @@ fn indexed_xcf(
     let _ = reader.fetch(rid, start, end);
     // Load the records, defining the counters of how many sites we skip
     let mut multiallelic = 0;
-    // let mut monom_gt1 = 0;
     let mut monom_gt2 = 0;
     let mut miss_gt1 = 0;
     let mut miss_gt2 = 0;
