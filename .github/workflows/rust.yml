@@ -39,7 +39,9 @@ jobs:
 
     - name: Windows deps
       if: matrix.os == 'windows-latest'
-      run: choco install openssl curl
+      run: |
+        choco install openssl curl
+        refreshenv
 
     - name: Build
       run: cargo build --verbose
