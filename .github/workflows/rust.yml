@@ -17,12 +17,15 @@ jobs:
       matrix:
         build: [
           ubuntu,
+          windows,
           macos_arm64,
           macos_x86_64
         ]
         include:
           - build: macos_arm64
             os: macos-latest
+          - build: windows
+            os: windows-latest
           - build: macos_x86_64
             os: macos-15-intel
           - build: ubuntu
