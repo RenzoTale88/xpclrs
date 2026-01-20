@@ -251,12 +251,34 @@ fn main() {
         Some(v) => v,
         None => *g_data.positions.iter().max().unwrap() as u64,
     };
-    // Avoid the case where the window would start beyond the end position.
-    let window_end = end
-        .saturating_sub(size)
-        .saturating_add(1);
+
+    // Validate that the window size is appropriate for the genomic region.
+    let start_pos = start.expect("Start position is required");
+    if end < start_pos {
+        eprintln!(
+            "Invalid genomic region: end position ({}) is less than start position ({}).",
+            end, start_pos
+        );
+        std::process::exit(1);
+    }
+    let region_len = end - start_pos;
+    if size == 0 {
+        eprintln!("Invalid window size: size must be greater than zero.");
+        std::process::exit(1);
+    }
+    if size > region_len {
+        eprintln!(
+            "Invalid window size: window size ({}) is larger than the genomic region length ({}). \
+             Please choose a smaller window size or a larger genomic region.",
+            size, region_len
+        );
+        std::process::exit(1);
+    }
+
+    // Compute the last valid start position for a window without relying on saturating arithmetic.
+    let window_end = end - size + 1;
     // Prepare the windows.
-    let windows = (start.unwrap()..window_end)
+    let windows = (start_pos..window_end)
         .step_by(step as usize)
         .map(|v| (v as usize, (v + size - 1) as usize))
         .collect::<Vec<(usize, usize)>>();
