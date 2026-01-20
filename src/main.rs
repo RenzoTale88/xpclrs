@@ -253,7 +253,7 @@ fn main() {
     };
 
     // Validate that the window size is appropriate for the genomic region.
-    let start_pos = start.expect("Start position is required");
+    let start_pos = start.unwrap();
     if end < start_pos {
         eprintln!(
             "Invalid genomic region: end position ({}) is less than start position ({}).",
