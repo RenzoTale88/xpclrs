@@ -69,10 +69,6 @@ jobs:
   exe:
     needs: build  # This job depends on the build job
     runs-on: ubuntu-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [ubuntu-latest]
     steps:
       - uses: actions/checkout@v4
       # Download the Ubuntu artifact from the build job
