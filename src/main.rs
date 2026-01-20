@@ -91,7 +91,7 @@ fn main() {
                 .long("size")
                 .required(false)
                 .default_value("20000")
-                .value_parser(value_parser!(i32))
+                .value_parser(value_parser!(u64))
                 .help("Sliding window size."),
         )
         .arg(
@@ -185,6 +185,7 @@ fn main() {
         .to_owned();
     let start = matches.get_one::<u64>("START").copied();
     let step = matches.get_one::<u64>("STEP").copied().unwrap();
+    let size = matches.get_one::<u64>("SIZE").copied().unwrap();
     let end = matches.get_one::<u64>("STOP").copied();
     let minsnps = matches.get_one::<u64>("MINSNPS").copied().unwrap();
     let maxsnps = matches.get_one::<u64>("MAXSNPS").copied().unwrap();
@@ -250,9 +251,14 @@ fn main() {
         Some(v) => v,
         None => *g_data.positions.iter().max().unwrap() as u64,
     };
-    let windows = (start.unwrap()..end)
+    // Avoid the case where the window would start beyond the end position.
+    let window_end = end
+        .saturating_sub(size)
+        .saturating_add(1);
+    // Prepare the windows.
+    let windows = (start.unwrap()..window_end)
         .step_by(step as usize)
-        .map(|v| (v as usize, (v as usize) + (step as usize) - 1))
+        .map(|v| (v as usize, (v + size - 1) as usize))
         .collect::<Vec<(usize, usize)>>();
 
     // Define thread pool
