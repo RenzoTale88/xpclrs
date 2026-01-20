@@ -17,19 +17,22 @@ jobs:
       matrix:
         build: [
           ubuntu,
-          windows,
+          ubuntu-arm,
           macos_arm64,
-          macos_x86_64
+          macos_x86_64,
+          windows
         ]
         include:
-          - build: macos_arm64
-            os: macos-latest
-          - build: windows
-            os: windows-latest
-          - build: macos_x86_64
-            os: macos-15-intel
           - build: ubuntu
             os: ubuntu-latest
+          - build: ubuntu_arm
+            os: ubuntu-24.04-arm
+          - build: macos_arm64
+            os: macos-latest
+          - build: macos_x86_64
+            os: macos-15-intel
+          - build: windows
+            os: windows-latest
     steps:
     - uses: actions/checkout@v4
 
@@ -42,7 +45,9 @@ jobs:
       shell: powershell
       run: |
         echo "VCPKG_ROOT=$env:VCPKG_INSTALLATION_ROOT" | Out-File -FilePath $env:GITHUB_ENV -Append
-        vcpkg install openssl:x64-windows-static-md
+        vcpkg install openssl:x64-windows
+        vcpkg install openssl:x64-windows-static
+        vcpkg integrate install
 
     - name: Build
       run: cargo build --verbose
