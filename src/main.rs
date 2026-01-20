@@ -261,19 +261,13 @@ fn main() {
         );
         std::process::exit(1);
     }
-    let region_len = end - start_pos;
     if size == 0 {
         eprintln!("Invalid window size: size must be greater than zero.");
         std::process::exit(1);
     }
-    if size > region_len {
-        eprintln!(
-            "Invalid window size: window size ({}) is larger than the genomic region length ({}). \
-             Please choose a smaller window size or a larger genomic region.",
-            size, region_len
-        );
-        std::process::exit(1);
-    }
+    // Use the smaller value between the user-defined size and the region length
+    // (avoid failing when the region is smaller than the window size).
+    let size = size.min(end - start_pos);
 
     // Compute the last valid start position for a window without relying on saturating arithmetic.
     let window_end = end - size + 1;
