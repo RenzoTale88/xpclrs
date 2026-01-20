@@ -18,21 +18,21 @@ jobs:
         build: [
           ubuntu,
           ubuntu-arm,
+          windows,
           macos_arm64,
-          macos_x86_64,
-          windows
+          macos_x86_64
         ]
         include:
+          - build: macos_arm64
+            os: macos-latest
+          - build: windows
+            os: windows-latest
+          - build: macos_x86_64
+            os: macos-15-intel
           - build: ubuntu
             os: ubuntu-latest
           - build: ubuntu_arm
             os: ubuntu-24.04-arm
-          - build: macos_arm64
-            os: macos-latest
-          - build: macos_x86_64
-            os: macos-15-intel
-          - build: windows
-            os: windows-latest
     steps:
     - uses: actions/checkout@v4
 
