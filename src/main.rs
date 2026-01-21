@@ -91,7 +91,7 @@ fn main() {
                 .long("size")
                 .required(false)
                 .default_value("20000")
-                .value_parser(value_parser!(i32))
+                .value_parser(value_parser!(u64))
                 .help("Sliding window size."),
         )
         .arg(
@@ -185,6 +185,7 @@ fn main() {
         .to_owned();
     let start = matches.get_one::<u64>("START").copied();
     let step = matches.get_one::<u64>("STEP").copied().unwrap();
+    let size = matches.get_one::<u64>("SIZE").copied().unwrap();
     let end = matches.get_one::<u64>("STOP").copied();
     let minsnps = matches.get_one::<u64>("MINSNPS").copied().unwrap();
     let maxsnps = matches.get_one::<u64>("MAXSNPS").copied().unwrap();
@@ -250,9 +251,30 @@ fn main() {
         Some(v) => v,
         None => *g_data.positions.iter().max().unwrap() as u64,
     };
-    let windows = (start.unwrap()..end)
+
+    // Validate that the window size is appropriate for the genomic region.
+    let start_pos = start.unwrap();
+    if end < start_pos {
+        eprintln!(
+            "Invalid genomic region: end position ({}) is less than start position ({}).",
+            end, start_pos
+        );
+        std::process::exit(1);
+    }
+    // Use the smaller value between the user-defined size and the region length
+    // (avoid failing when the region is smaller than the window size).
+    let size = size.min(end - start_pos);
+    if size == 0 {
+        eprintln!("Invalid window size: size must be greater than zero.");
+        std::process::exit(1);
+    }
+
+    // Compute the last valid start position for a window without relying on saturating arithmetic.
+    let window_end = end - size + 1;
+    // Prepare the windows.
+    let windows = (start_pos..window_end)
         .step_by(step as usize)
-        .map(|v| (v as usize, (v as usize) + (step as usize) - 1))
+        .map(|v| (v as usize, (v + size - 1) as usize))
         .collect::<Vec<(usize, usize)>>();
 
     // Define thread pool

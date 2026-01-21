@@ -17,31 +17,29 @@ jobs:
       matrix:
         build: [
           ubuntu,
-          windows,
+          ubuntu-arm,
           macos_arm64,
           macos_x86_64
         ]
         include:
           - build: macos_arm64
             os: macos-latest
-          - build: windows
-            os: windows-latest
           - build: macos_x86_64
             os: macos-15-intel
           - build: ubuntu
             os: ubuntu-latest
+          - build: ubuntu-arm
+            os: ubuntu-24.04-arm
     steps:
     - uses: actions/checkout@v4
 
-    - name: Linux deps
+    - name: Linux X86 deps
       if: matrix.os == 'ubuntu-latest'
       run: sudo apt-get update && sudo apt-get install libopenblas-dev
 
-    - name: Windows deps
-      if: matrix.os == 'windows-latest'
-      run: |
-        choco install openssl curl
-        refreshenv
+    - name: Linux ARM deps
+      if: matrix.os == 'ubuntu-24.04-arm'
+      run: sudo apt-get update && sudo apt-get install libopenblas-dev
 
     - name: Build
       run: cargo build --verbose
@@ -68,8 +66,6 @@ jobs:
   exe:
     needs: build  # This job depends on the build job
     runs-on: ubuntu-latest
-    strategy:
-      fail-fast: false
     steps:
       - uses: actions/checkout@v4
       # Download the Ubuntu artifact from the build job
