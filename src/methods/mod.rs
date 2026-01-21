@@ -627,3 +627,78 @@ pub fn xpclr(
     results.sort_by_key(|item| item.0);
     Ok(results)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn approx_eq(a: f64, b: f64, tol: f64) -> bool {
+        (a - b).abs() <= tol
+    }
+
+    #[test]
+    fn bisector_basic_indices() {
+        let data = vec![1, 2, 2, 3, 5];
+        let b = Bisector::new(&data);
+        assert_eq!(b.bisect_left(&2), 1);
+        assert_eq!(b.bisect_right(&2), 3);
+        assert_eq!(b.bisect_left(&4), 4);
+        assert_eq!(b.bisect_right(&0), 0);
+    }
+
+    #[test]
+    fn partial_bisector_with_floats() {
+        let data = vec![0.1_f64, 0.2, 0.2, 0.5];
+        let b = PartialBisector::new(&data);
+        assert_eq!(b.bisect_left(&0.2), 1);
+        assert_eq!(b.bisect_right(&0.2), 3);
+        assert_eq!(b.bisect_left(&0.3), 3);
+        assert_eq!(b.bisect_right(&0.3), 3);
+    }
+
+    #[test]
+    fn omega_estimation_matches_formula() {
+        let q1 = vec![0.2_f64, 0.3];
+        let q2 = vec![0.4_f64, 0.5];
+        let expected = mean(
+            &q1.iter()
+                .zip(&q2)
+                .map(|(p, q)| ((p - q).powi(2)) / (q * (1.0_f64 - q)))
+                .collect::<Vec<f64>>(),
+        );
+        let w = est_omega(&q1, &q2).expect("omega");
+        assert!(approx_eq(w, expected, 1e-12));
+    }
+
+    #[test]
+    fn variance_estimate_simple() {
+        let w = 2.0_f64;
+        let q2 = 0.25_f64;
+        let v = var_estimate(w, q2).expect("variance");
+        assert!(approx_eq(v, 0.375_f64, 1e-12));
+    }
+
+    #[test]
+    fn compute_c_bounds_and_rounding() {
+        let c0 = compute_c(0.01, 0.0, Some(20000), Some(1e-7), Some(5))
+            .expect("compute_c");
+        assert!(approx_eq(c0, 1.0_f64, 1e-12));
+
+        let c = compute_c(0.01, 0.1, Some(20000), Some(1e-7), Some(5))
+            .expect("compute_c");
+        assert!((0.0_f64..=1.0_f64).contains(&c));
+        let x = -((2.0_f64 * 20000.0_f64).ln()) * (0.01_f64.max(1e-7)) / 0.1;
+        let expected = round_to(1.0 - x.exp(), 5);
+        assert!(approx_eq(c, expected, 1e-12));
+    }
+
+    #[test]
+    fn pdf_scalar_interval_behavior() {
+        let dens_left = pdf_scalar(0.05, 0.1, 0.4, 0.02);
+        let dens_mid = pdf_scalar(0.5, 0.1, 0.4, 0.02);
+        let dens_right = pdf_scalar(0.95, 0.1, 0.4, 0.02);
+        assert!(dens_left > 0.0_f64);
+        assert!(dens_right > 0.0_f64);
+        assert!(approx_eq(dens_mid, 0.0_f64, 1e-12));
+    }
+}
