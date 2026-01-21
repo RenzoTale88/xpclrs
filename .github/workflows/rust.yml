@@ -18,15 +18,12 @@ jobs:
         build: [
           ubuntu,
           ubuntu-arm,
-          windows,
           macos_arm64,
           macos_x86_64
         ]
         include:
           - build: macos_arm64
             os: macos-latest
-          - build: windows
-            os: windows-latest
           - build: macos_x86_64
             os: macos-15-intel
           - build: ubuntu
@@ -43,22 +40,6 @@ jobs:
     - name: Linux deps
       if: matrix.os == 'ubuntu-24.04-arm'
       run: sudo apt-get update && sudo apt-get install libopenblas-dev
-
-    - name: Windows deps
-      if: matrix.os == 'windows-latest'
-      shell: powershell
-      run: |
-        $triplet = "x64-windows"
-        echo "VCPKG_ROOT=$env:VCPKG_INSTALLATION_ROOT" | Out-File -FilePath $env:GITHUB_ENV -Append
-        echo "VCPKG_DEFAULT_TRIPLET=$triplet" | Out-File -FilePath $env:GITHUB_ENV -Append
-        echo "VCPKGRS_DYNAMIC=1" | Out-File -FilePath $env:GITHUB_ENV -Append
-        vcpkg install openssl:x64-windows
-        vcpkg install openssl:x64-windows-static
-        $opensslDir = "$env:VCPKG_INSTALLATION_ROOT\installed\$triplet"
-        echo "OPENSSL_DIR=$opensslDir" | Out-File -FilePath $env:GITHUB_ENV -Append
-        echo "OPENSSL_INCLUDE_DIR=$opensslDir\include" | Out-File -FilePath $env:GITHUB_ENV -Append
-        echo "OPENSSL_LIB_DIR=$opensslDir\lib" | Out-File -FilePath $env:GITHUB_ENV -Append
-        vcpkg integrate install
 
     - name: Build
       run: cargo build --verbose
