@@ -261,13 +261,13 @@ fn main() {
         );
         std::process::exit(1);
     }
+    // Use the smaller value between the user-defined size and the region length
+    // (avoid failing when the region is smaller than the window size).
+    let size = size.min(end - start_pos);
     if size == 0 {
         eprintln!("Invalid window size: size must be greater than zero.");
         std::process::exit(1);
     }
-    // Use the smaller value between the user-defined size and the region length
-    // (avoid failing when the region is smaller than the window size).
-    let size = size.min(end - start_pos);
 
     // Compute the last valid start position for a window without relying on saturating arithmetic.
     let window_end = end - size + 1;
