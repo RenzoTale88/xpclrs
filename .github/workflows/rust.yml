@@ -40,6 +40,10 @@ jobs:
       if: matrix.os == 'ubuntu-latest'
       run: sudo apt-get update && sudo apt-get install libopenblas-dev
 
+    - name: Linux deps
+      if: matrix.os == 'ubuntu-24.04-arm'
+      run: sudo apt-get update && sudo apt-get install libopenblas-dev
+
     - name: Windows deps
       if: matrix.os == 'windows-latest'
       shell: powershell
@@ -74,10 +78,6 @@ jobs:
   exe:
     needs: build  # This job depends on the build job
     runs-on: ubuntu-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [ubuntu-latest]
     steps:
       - uses: actions/checkout@v4
       # Download the Ubuntu artifact from the build job
