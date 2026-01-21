@@ -693,7 +693,7 @@ mod tests {
     }
 
     #[test]
-    fn pdf_scalar_outside_interval_positive() {
+    fn pdf_scalar_interval_behavior() {
         let dens_left = pdf_scalar(0.05, 0.1, 0.4, 0.02);
         let dens_mid = pdf_scalar(0.5, 0.1, 0.4, 0.02);
         let dens_right = pdf_scalar(0.95, 0.1, 0.4, 0.02);
