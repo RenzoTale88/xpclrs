@@ -164,7 +164,7 @@ fn main() {
                 .required(false)
                 .default_value("info")
                 .value_parser([PossibleValue::new("info"), PossibleValue::new("debug")])
-                .help("Number of threads to use"),
+                .help("Logging level."),
         )
         .get_matches();
 
@@ -269,10 +269,8 @@ fn main() {
         std::process::exit(1);
     }
 
-    // Compute the last valid start position for a window without relying on saturating arithmetic.
-    let window_end = end - size + 1;
     // Prepare the windows.
-    let windows = (start_pos..window_end)
+    let windows = (start_pos..end)
         .step_by(step as usize)
         .map(|v| (v as usize, (v + size - 1) as usize))
         .collect::<Vec<(usize, usize)>>();
