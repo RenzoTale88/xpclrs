@@ -218,9 +218,9 @@ fn _integrate_qags_gk_scirs2<F>(
     f: F,
     a: f64,
     b: f64,
-    _epsabs: f64,
-    _epsrel: f64,
-    _limit: usize,
+    epsabs: f64,
+    epsrel: f64,
+    limit: usize,
     fast: Option<bool>
 ) -> (f64, f64)
 where
@@ -235,9 +235,9 @@ where
         // or use the Simpson's rule directly rather than the adaptive algorithm
         let options = QuadOptions {
             use_simpson: true, // Use Simpson's rule directly
-            abs_tol: _epsabs,
-            rel_tol: _epsrel,
-            max_evals: _limit,
+            abs_tol: epsabs,
+            rel_tol: epsrel,
+            max_evals: limit,
             ..Default::default()
         };
         let quadresult = quad(|x: f64| f(x), a, b, Some(options)).expect("Operation failed");
