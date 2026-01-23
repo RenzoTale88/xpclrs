@@ -71,7 +71,7 @@ fn main() {
         .arg(
             Arg::new("MAXSNPS")
                 .long("maxsnps")
-                .short('m')
+                .short('M')
                 .required(false)
                 .default_value("200")
                 .value_parser(value_parser!(u64))
