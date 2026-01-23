@@ -279,6 +279,7 @@ fn _compute_chen_likelihood(xj: u64, nj: u64, c: f64, p2: f64, var: f64, fast: O
 }
 
 // Compute composite likelihood
+#[allow(clippy::too_many_arguments)]
 fn compute_complikelihood(
     sc: f64,
     xs: &[u64],
