@@ -175,8 +175,6 @@ fn main() {
                 .help("Logging level."),
         )
         .get_matches();
-    
-
     // set up logging
     let log_level = matches
         .get_one::<String>("LOG")
