@@ -40,24 +40,22 @@ pub struct GenoData {
 
 // Genotypes to counts
 fn gt2gcount(gt: Genotype, ref_ix: u32) -> i8 {
-    // Extract allele indices, ignoring missing
-    let alleles: Vec<u32> = gt
-        .iter()
-        .filter_map(|a| a.index()) // skip missing
-        .collect();
-
-    if alleles.is_empty() {
-        // All missing
-        -9_i8
-    } else {
-        // Count how many are NOT the ref allele
-        let alt_count = alleles.iter().filter(|&&ix| ix != ref_ix).count() as i8;
-
-        if alt_count == 0 {
-            0
-        } else {
-            alt_count
+    // Single-pass count without allocating a temporary allele vector.
+    let mut seen = false;
+    let mut alt_count: i8 = 0;
+    for allele in gt.iter().filter_map(|a| a.index()) {
+        seen = true;
+        if allele != ref_ix {
+            alt_count += 1;
         }
+    }
+
+    if !seen {
+        -9_i8
+    } else if alt_count == 0 {
+        0
+    } else {
+        alt_count
     }
 }
 
@@ -147,6 +145,8 @@ fn indexed_xcf(
     // Prepare the indexed reader
     let mut reader = IndexedReader::from_path(xcf_fn).expect("Cannot load indexed BCF/VCF file");
     let rrate = rrate.unwrap_or(1e-8);
+    // Resolve options once to avoid per-record branching.
+    let phased = phased.unwrap_or(false);
 
     // Load the XCF file
     let xcf_header = reader.header().clone();
@@ -260,7 +260,7 @@ fn indexed_xcf(
                     .map(|gt| gt2gcount(gt, ref_ix))
                     .collect::<Vec<i8>>();
                 // If phased, store haplotypes in gt2; else store dosages
-                let gt2 = if phased.unwrap_or(false) {
+                let gt2 = if phased {
                     gt2_g
                         .iter()
                         .flat_map(|gt| {
@@ -328,6 +328,8 @@ fn readthrough_xcf(
     let mut reader = Reader::from_path(xcf_fn).expect("Cannot load indexed BCF/VCF file");
     let end = end.unwrap_or(999999999);
     let rrate = rrate.unwrap_or(1e-8);
+    // Resolve options once to avoid per-record branching.
+    let phased = phased.unwrap_or(false);
 
     // Load the XCF file
     let xcf_header = reader.header().clone();
@@ -446,7 +448,7 @@ fn readthrough_xcf(
                     .map(|gt| gt2gcount(gt, ref_ix))
                     .collect::<Vec<i8>>();
                 // If phased, store haplotypes in gt2; else store dosages
-                let gt2 = if phased.unwrap_or(false) {
+                let gt2 = if phased {
                     gt2_g
                         .iter()
                         .flat_map(|gt| {
