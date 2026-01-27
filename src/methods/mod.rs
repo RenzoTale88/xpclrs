@@ -7,6 +7,7 @@ use itertools::Itertools;
 use rand::prelude::IndexedRandom;
 use rayon::prelude::*;
 use scirs2_integrate::gaussian::gauss_kronrod21;
+use scirs2_integrate::quad::{quad, QuadOptions};
 use statistical::mean;
 use statrs::distribution::{Binomial, Discrete};
 use std::f64::consts::PI;
@@ -217,19 +218,35 @@ fn _integrate_qags_gk_scirs2<F>(
     f: F,
     a: f64,
     b: f64,
-    _epsabs: f64,
-    _epsrel: f64,
-    _limit: usize,
+    epsabs: f64,
+    epsrel: f64,
+    limit: usize,
+    fast: Option<bool>
 ) -> (f64, f64)
 where
     F: Fn(f64) -> f64,
 {
+    let (value, abs_error) = if fast == Some(true) {
     // QAGS: adaptive Gauss–Kronrod with singularity handling
-    let (value, abs_error, _est) = gauss_kronrod21(|x: f64| f(x), a, b);
+        let (value, abs_error, _est) = gauss_kronrod21(|x: f64| f(x), a, b);
+        (value, abs_error)
+    } else {
+        // For more complex functions like sin(1/x), we need a simpler test case
+        // or use the Simpson's rule directly rather than the adaptive algorithm
+        let options = QuadOptions {
+            use_simpson: true, // Use Simpson's rule directly
+            abs_tol: epsabs,
+            rel_tol: epsrel,
+            max_evals: limit,
+            ..Default::default()
+        };
+        let quadresult = quad(|x: f64| f(x), a, b, Some(options)).expect("Operation failed");
+        (quadresult.value, quadresult.abs_error)
+    };
     (value, abs_error)
 }
 
-fn _compute_chen_likelihood(xj: u64, nj: u64, c: f64, p2: f64, var: f64) -> Result<f64> {
+fn _compute_chen_likelihood(xj: u64, nj: u64, c: f64, p2: f64, var: f64, fast: Option<bool>) -> Result<f64> {
     // Integral bounds and tolerances matching SciPy quad
     let a = 0.001;
     let b = 0.999;
@@ -246,12 +263,12 @@ fn _compute_chen_likelihood(xj: u64, nj: u64, c: f64, p2: f64, var: f64) -> Resu
         epsabs,
         epsrel,
         limit,
-    );
+        fast
+        );
 
     // Base integral of the pdf (denominator)
     let (like_b, _err_b) =
-        _integrate_qags_gk_scirs2(|p1| pdf_scalar(p1, c, p2, var), a, b, epsabs, epsrel, limit);
-
+        _integrate_qags_gk_scirs2(|p1| pdf_scalar(p1, c, p2, var), a, b, epsabs, epsrel, limit, fast);
     // Return the right value
     let ratio = if like_i > 0.0 && like_b > 0.0 {
         like_i.ln() - like_b.ln()
@@ -262,6 +279,7 @@ fn _compute_chen_likelihood(xj: u64, nj: u64, c: f64, p2: f64, var: f64) -> Resu
 }
 
 // Compute composite likelihood
+#[allow(clippy::too_many_arguments)]
 fn compute_complikelihood(
     sc: f64,
     xs: &[u64],
@@ -270,6 +288,7 @@ fn compute_complikelihood(
     p2freqs: &[f64],
     weights: &[f64],
     omegas: &[f64],
+    fast: Option<bool>,
 ) -> Result<f64> {
     if !(0.0..1.0).contains(&sc) {
         Ok(f64::INFINITY)
@@ -282,7 +301,7 @@ fn compute_complikelihood(
                 let c = compute_c(*r, sc, None, None, Some(5_u32)).expect("Cannot compute C");
                 // Compute likelihood
                 // Use GSL QAGP with breakpoints to mirror SciPy's quad behavior
-                let cl = _compute_chen_likelihood(*xj, *nj, c, *p2, var)
+                let cl = _compute_chen_likelihood(*xj, *nj, c, *p2, var, fast)
                     .expect("Cannot compute the likelihood");
                 // Return the weighted margin
                 cl * *weight
@@ -302,7 +321,7 @@ fn compute_xpclr(
     weights: &[f64],
     omegas: &[f64],
     sel_coeffs: &[f64],
-    _method: Option<usize>,
+    fast: Option<bool>,
 ) -> Result<(f64, f64, f64)> {
     // Extract counts
     let xs = counts.0;
@@ -316,7 +335,7 @@ fn compute_xpclr(
     // Define selection coefficient
     for (counter, sc) in sel_coeffs.iter().enumerate() {
         // Compute ll
-        let ll = compute_complikelihood(*sc, xs, ns, rds, p2freqs, weights, omegas)
+        let ll = compute_complikelihood(*sc, xs, ns, rds, p2freqs, weights, omegas, fast)
             .expect("Cannot infer composite likelihood");
         if counter == 0 {
             null_model_li = ll;
@@ -551,6 +570,7 @@ pub fn xpclr(
     maxsnps: usize,
     minsnps: usize, // Size/count filters
     phased: Option<bool>,
+    fast: Option<bool>,
 ) -> Result<Vec<(usize, XPCLRResult)>> {
     let sel_coeffs = vec![
         0.0, 0.00001, 0.00005, 0.0001, 0.0002, 0.0004, 0.0006, 0.0008, 0.001, 0.003, 0.005, 0.01,
@@ -610,7 +630,7 @@ pub fn xpclr(
                     &weights,
                     &omegas,
                     &sel_coeffs,
-                    None
+                    fast
                 ).expect("Failed computing XP-CLR for window");
                 let xpclr_v = 2.0_f64 * (xpclr_res.0 - xpclr_res.1);
                 let xpclr_win_res = XPCLRResult{

@@ -71,7 +71,7 @@ fn main() {
         .arg(
             Arg::new("MAXSNPS")
                 .long("maxsnps")
-                .short('m')
+                .short('M')
                 .required(false)
                 .default_value("200")
                 .value_parser(value_parser!(u64))
@@ -158,6 +158,14 @@ fn main() {
                 .help("Format to save the output (csv, tsv, txt)"),
         )
         .arg(
+            Arg::new("FAST")
+                .short('F')
+                .long("fast")
+                .required(false)
+                .action(ArgAction::SetTrue)
+                .help("Run analysis in fast mode (faster integration, but gives results that are less accurate compared with the original tool)"),
+        )
+        .arg(
             Arg::new("LOG")
                 .short('l')
                 .long("log")
@@ -167,7 +175,6 @@ fn main() {
                 .help("Logging level."),
         )
         .get_matches();
-
     // set up logging
     let log_level = matches
         .get_one::<String>("LOG")
@@ -193,6 +200,7 @@ fn main() {
     let rrate = matches.get_one::<f64>("RECRATE").copied();
     let distkey = matches.get_one::<String>("DISTKEYS").cloned();
     let phased = matches.get_one::<bool>("PHASED").copied();
+    let fast = matches.get_one::<bool>("FAST").copied();
 
     // Get the VCF
     let xcf_path = matches
@@ -292,6 +300,7 @@ fn main() {
             maxsnps as usize,
             minsnps as usize,
             phased,
+            fast
         )
         .expect("Failed running the XP-CLR function");
         // Write output
