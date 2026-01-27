@@ -188,80 +188,81 @@ fn indexed_xcf(
     let mut pass = 0;
     let mut skipped = 0;
     let mut tot = 0;
-    let (positions, gt1_data, gt2_data, gd_data): (Vec<_>, Vec<_>, Vec<_>, Vec<_>) = reader
-        .records()
-        .filter_map(|r| {
-            let record = r.ok()?;
-            tot += 1;
-            let genotypes = record.genotypes().expect("Cannot fetch the genotypes");
-            let gt1_g = i1
-                .iter()
-                .map(|i| genotypes.get(*i))
-                .collect::<Vec<Genotype>>();
-            let gt2_g = i2
-                .iter()
-                .map(|i| genotypes.get(*i))
-                .collect::<Vec<Genotype>>();
-            // Check that the site is biallelic
-            let alleles1: Counter<u32> = gt1_g
-                .iter()
-                .flat_map(|g| g.iter().filter_map(|&a: &GenotypeAllele| a.index()))
-                .collect::<Counter<u32>>();
 
-            let alleles2: Counter<u32> = gt2_g
-                .iter()
-                .flat_map(|g| g.iter().filter_map(|a| a.index()))
-                .collect::<Counter<u32>>();
+    let (positions, gt1_data, gt2_data, gd_data): (Vec<_>, Vec<_>, Vec<_>, Vec<_>) = if phased {
+        reader
+            .records()
+            .filter_map(|r| {
+                let record = r.ok()?;
+                tot += 1;
+                let genotypes = record.genotypes().expect("Cannot fetch the genotypes");
+                let gt1_g = i1
+                    .iter()
+                    .map(|i| genotypes.get(*i))
+                    .collect::<Vec<Genotype>>();
+                let gt2_g = i2
+                    .iter()
+                    .map(|i| genotypes.get(*i))
+                    .collect::<Vec<Genotype>>();
+                // Check that the site is biallelic
+                let alleles1: Counter<u32> = gt1_g
+                    .iter()
+                    .flat_map(|g| g.iter().filter_map(|&a: &GenotypeAllele| a.index()))
+                    .collect::<Counter<u32>>();
 
-            // Define genetic position
-            let gd = match &gdistkey {
-                Some(key) => record
-                    .info(key.as_bytes())
-                    .float()
-                    .ok()
-                    .flatten()
-                    .expect("Missing info field for genetic position")[0]
-                    as f64,
-                None => record.pos() as f64 * rrate,
-            };
+                let alleles2: Counter<u32> = gt2_g
+                    .iter()
+                    .flat_map(|g| g.iter().filter_map(|a| a.index()))
+                    .collect::<Counter<u32>>();
 
-            // Union both sets
-            let mut all_alleles: Counter<_> = alleles1.clone();
-            all_alleles.extend(&alleles2);
-
-            // Perform filtering and counting
-            if all_alleles.len() > 2 {
-                skipped += 1;
-                multiallelic += 1;
-                None
-            } else if alleles1.is_empty() || alleles2.is_empty() {
-                skipped += 1;
-                if alleles1.is_empty() {
-                    miss_gt1 += 1;
+                // Define genetic position
+                let gd = match &gdistkey {
+                    Some(key) => record
+                        .info(key.as_bytes())
+                        .float()
+                        .ok()
+                        .flatten()
+                        .expect("Missing info field for genetic position")[0]
+                        as f64,
+                    None => record.pos() as f64 * rrate,
                 };
-                if alleles2.is_empty() {
-                    miss_gt2 += 1;
-                };
-                None
-            } else if alleles2.len() == 1 || alleles2.values().min().copied()? == 1 {
-                skipped += 1;
-                monom_gt2 += 1;
-                None
-            } else {
-                pass += 1;
-                // Define reference allele as the minimum allele index (consistent with methods)
-                let ref_ix = *all_alleles
-                    .keys()
-                    .min()
-                    .expect("Can't compute reference allele index");
-                // Encode genotypes to compact i8 counts relative to ref allele
-                let gt1 = gt1_g
-                    .into_iter()
-                    .map(|gt| gt2gcount(gt, ref_ix))
-                    .collect::<Vec<i8>>();
-                // If phased, store haplotypes in gt2; else store dosages
-                let gt2 = if phased {
-                    gt2_g
+
+                // Union both sets
+                let mut all_alleles: Counter<_> = alleles1.clone();
+                all_alleles.extend(&alleles2);
+
+                // Perform filtering and counting
+                if all_alleles.len() > 2 {
+                    skipped += 1;
+                    multiallelic += 1;
+                    None
+                } else if alleles1.is_empty() || alleles2.is_empty() {
+                    skipped += 1;
+                    if alleles1.is_empty() {
+                        miss_gt1 += 1;
+                    };
+                    if alleles2.is_empty() {
+                        miss_gt2 += 1;
+                    };
+                    None
+                } else if alleles2.len() == 1 || alleles2.values().min().copied()? == 1 {
+                    skipped += 1;
+                    monom_gt2 += 1;
+                    None
+                } else {
+                    pass += 1;
+                    // Define reference allele as the minimum allele index (consistent with methods)
+                    let ref_ix = *all_alleles
+                        .keys()
+                        .min()
+                        .expect("Can't compute reference allele index");
+                    // Encode genotypes to compact i8 counts relative to ref allele
+                    let gt1 = gt1_g
+                        .into_iter()
+                        .map(|gt| gt2gcount(gt, ref_ix))
+                        .collect::<Vec<i8>>();
+                    // If phased, store haplotypes in gt2; else store dosages
+                    let gt2 = gt2_g
                         .iter()
                         .flat_map(|gt| {
                             gt.iter().map(|a| match a {
@@ -270,17 +271,93 @@ fn indexed_xcf(
                                 _ => a.index().unwrap() as i8,
                             })
                         })
-                        .collect::<Vec<i8>>()
+                        .collect::<Vec<i8>>();
+                    Some((record.pos() as usize, gt1, gt2, gd))
+                }
+            })
+            .multiunzip()
+    } else {
+        reader
+            .records()
+            .filter_map(|r| {
+                let record = r.ok()?;
+                tot += 1;
+                let genotypes = record.genotypes().expect("Cannot fetch the genotypes");
+                let gt1_g = i1
+                    .iter()
+                    .map(|i| genotypes.get(*i))
+                    .collect::<Vec<Genotype>>();
+                let gt2_g = i2
+                    .iter()
+                    .map(|i| genotypes.get(*i))
+                    .collect::<Vec<Genotype>>();
+                // Check that the site is biallelic
+                let alleles1: Counter<u32> = gt1_g
+                    .iter()
+                    .flat_map(|g| g.iter().filter_map(|&a: &GenotypeAllele| a.index()))
+                    .collect::<Counter<u32>>();
+
+                let alleles2: Counter<u32> = gt2_g
+                    .iter()
+                    .flat_map(|g| g.iter().filter_map(|a| a.index()))
+                    .collect::<Counter<u32>>();
+
+                // Define genetic position
+                let gd = match &gdistkey {
+                    Some(key) => record
+                        .info(key.as_bytes())
+                        .float()
+                        .ok()
+                        .flatten()
+                        .expect("Missing info field for genetic position")[0]
+                        as f64,
+                    None => record.pos() as f64 * rrate,
+                };
+
+                // Union both sets
+                let mut all_alleles: Counter<_> = alleles1.clone();
+                all_alleles.extend(&alleles2);
+
+                // Perform filtering and counting
+                if all_alleles.len() > 2 {
+                    skipped += 1;
+                    multiallelic += 1;
+                    None
+                } else if alleles1.is_empty() || alleles2.is_empty() {
+                    skipped += 1;
+                    if alleles1.is_empty() {
+                        miss_gt1 += 1;
+                    };
+                    if alleles2.is_empty() {
+                        miss_gt2 += 1;
+                    };
+                    None
+                } else if alleles2.len() == 1 || alleles2.values().min().copied()? == 1 {
+                    skipped += 1;
+                    monom_gt2 += 1;
+                    None
                 } else {
-                    gt2_g
+                    pass += 1;
+                    // Define reference allele as the minimum allele index (consistent with methods)
+                    let ref_ix = *all_alleles
+                        .keys()
+                        .min()
+                        .expect("Can't compute reference allele index");
+                    // Encode genotypes to compact i8 counts relative to ref allele
+                    let gt1 = gt1_g
                         .into_iter()
                         .map(|gt| gt2gcount(gt, ref_ix))
-                        .collect::<Vec<i8>>()
-                };
-                Some((record.pos() as usize, gt1, gt2, gd))
-            }
-        })
-        .multiunzip();
+                        .collect::<Vec<i8>>();
+                    // If phased, store haplotypes in gt2; else store dosages
+                    let gt2 = gt2_g
+                        .into_iter()
+                        .map(|gt| gt2gcount(gt, ref_ix))
+                        .collect::<Vec<i8>>();
+                    Some((record.pos() as usize, gt1, gt2, gd))
+                }
+            })
+            .multiunzip()
+    };
 
     // Assess everything looks good
     if gt1_data.len() != gt2_data.len() {
@@ -370,86 +447,86 @@ fn readthrough_xcf(
     let mut pass = 0;
     let mut skipped = 0;
     let mut tot = 0;
-    let (positions, gt1_data, gt2_data, gd_data): (Vec<_>, Vec<_>, Vec<_>, Vec<_>) = reader
-        .records()
-        .filter(|r| {
-            let record = r.as_ref().unwrap();
-            let pos = record.pos() as u64;
-            record.rid().unwrap() == rid && (pos >= start && pos < end)
-        })
-        .filter_map(|r| {
-            let record = r.ok()?;
-            tot += 1;
-            let genotypes = record.genotypes().expect("Cannot fetch the genotypes");
-            let gt1_g = i1
-                .iter()
-                .map(|i| genotypes.get(*i))
-                .collect::<Vec<Genotype>>();
-            let gt2_g = i2
-                .iter()
-                .map(|i| genotypes.get(*i))
-                .collect::<Vec<Genotype>>();
+    let (positions, gt1_data, gt2_data, gd_data): (Vec<_>, Vec<_>, Vec<_>, Vec<_>) = if phased {
+        reader
+            .records()
+            .filter(|r| {
+                let record = r.as_ref().unwrap();
+                let pos = record.pos() as u64;
+                record.rid().unwrap() == rid && (pos >= start && pos < end)
+            })
+            .filter_map(|r| {
+                let record = r.ok()?;
+                tot += 1;
+                let genotypes = record.genotypes().expect("Cannot fetch the genotypes");
+                let gt1_g = i1
+                    .iter()
+                    .map(|i| genotypes.get(*i))
+                    .collect::<Vec<Genotype>>();
+                let gt2_g = i2
+                    .iter()
+                    .map(|i| genotypes.get(*i))
+                    .collect::<Vec<Genotype>>();
 
-            // Check that the site is biallelic
-            let alleles1: Counter<u32> = gt1_g
-                .iter()
-                .flat_map(|g| g.iter().filter_map(|&a: &GenotypeAllele| a.index()))
-                .collect::<Counter<u32>>();
+                // Check that the site is biallelic
+                let alleles1: Counter<u32> = gt1_g
+                    .iter()
+                    .flat_map(|g| g.iter().filter_map(|&a: &GenotypeAllele| a.index()))
+                    .collect::<Counter<u32>>();
 
-            let alleles2: Counter<u32> = gt2_g
-                .iter()
-                .flat_map(|g| g.iter().filter_map(|a| a.index()))
-                .collect::<Counter<u32>>();
+                let alleles2: Counter<u32> = gt2_g
+                    .iter()
+                    .flat_map(|g| g.iter().filter_map(|a| a.index()))
+                    .collect::<Counter<u32>>();
 
-            // Union both sets
-            let mut all_alleles: Counter<_> = alleles1.clone();
-            all_alleles.extend(&alleles2);
+                // Union both sets
+                let mut all_alleles: Counter<_> = alleles1.clone();
+                all_alleles.extend(&alleles2);
 
-            // Define genetic position
-            let gd = match &gdistkey {
-                Some(key) => record
-                    .info(key.as_bytes())
-                    .float()
-                    .ok()
-                    .flatten()
-                    .expect("Missing info field for genetic position")[0]
-                    as f64,
-                None => record.pos() as f64 * rrate,
-            };
-
-            // Perform filtering and counting
-            if all_alleles.len() > 2 {
-                skipped += 1;
-                multiallelic += 1;
-                None
-            } else if alleles1.is_empty() || alleles2.is_empty() {
-                skipped += 1;
-                if alleles1.is_empty() {
-                    miss_gt1 += 1;
+                // Define genetic position
+                let gd = match &gdistkey {
+                    Some(key) => record
+                        .info(key.as_bytes())
+                        .float()
+                        .ok()
+                        .flatten()
+                        .expect("Missing info field for genetic position")[0]
+                        as f64,
+                    None => record.pos() as f64 * rrate,
                 };
-                if alleles2.is_empty() {
-                    miss_gt2 += 1;
-                };
-                None
-            } else if alleles2.len() == 1 || alleles2.values().min().copied()? == 1 {
-                skipped += 1;
-                monom_gt2 += 1;
-                None
-            } else {
-                pass += 1;
-                // Define reference allele as the minimum allele index
-                let ref_ix = *all_alleles
-                    .keys()
-                    .min()
-                    .expect("Can't compute reference allele index");
-                // Encode genotypes to compact i8 counts relative to ref allele
-                let gt1 = gt1_g
-                    .into_iter()
-                    .map(|gt| gt2gcount(gt, ref_ix))
-                    .collect::<Vec<i8>>();
-                // If phased, store haplotypes in gt2; else store dosages
-                let gt2 = if phased {
-                    gt2_g
+
+                // Perform filtering and counting
+                if all_alleles.len() > 2 {
+                    skipped += 1;
+                    multiallelic += 1;
+                    None
+                } else if alleles1.is_empty() || alleles2.is_empty() {
+                    skipped += 1;
+                    if alleles1.is_empty() {
+                        miss_gt1 += 1;
+                    };
+                    if alleles2.is_empty() {
+                        miss_gt2 += 1;
+                    };
+                    None
+                } else if alleles2.len() == 1 || alleles2.values().min().copied()? == 1 {
+                    skipped += 1;
+                    monom_gt2 += 1;
+                    None
+                } else {
+                    pass += 1;
+                    // Define reference allele as the minimum allele index
+                    let ref_ix = *all_alleles
+                        .keys()
+                        .min()
+                        .expect("Can't compute reference allele index");
+                    // Encode genotypes to compact i8 counts relative to ref allele
+                    let gt1 = gt1_g
+                        .into_iter()
+                        .map(|gt| gt2gcount(gt, ref_ix))
+                        .collect::<Vec<i8>>();
+                    // If phased, store haplotypes in gt2; else store dosages
+                    let gt2 = gt2_g
                         .iter()
                         .flat_map(|gt| {
                             gt.iter().map(|a| match a {
@@ -458,17 +535,99 @@ fn readthrough_xcf(
                                 _ => a.index().unwrap() as i8,
                             })
                         })
-                        .collect::<Vec<i8>>()
+                        .collect::<Vec<i8>>();
+                    Some((record.pos() as usize, gt1, gt2, gd))
+                }
+            })
+            .multiunzip()
+    } else {
+        reader
+            .records()
+            .filter(|r| {
+                let record = r.as_ref().unwrap();
+                let pos = record.pos() as u64;
+                record.rid().unwrap() == rid && (pos >= start && pos < end)
+            })
+            .filter_map(|r| {
+                let record = r.ok()?;
+                tot += 1;
+                let genotypes = record.genotypes().expect("Cannot fetch the genotypes");
+                let gt1_g = i1
+                    .iter()
+                    .map(|i| genotypes.get(*i))
+                    .collect::<Vec<Genotype>>();
+                let gt2_g = i2
+                    .iter()
+                    .map(|i| genotypes.get(*i))
+                    .collect::<Vec<Genotype>>();
+
+                // Check that the site is biallelic
+                let alleles1: Counter<u32> = gt1_g
+                    .iter()
+                    .flat_map(|g| g.iter().filter_map(|&a: &GenotypeAllele| a.index()))
+                    .collect::<Counter<u32>>();
+
+                let alleles2: Counter<u32> = gt2_g
+                    .iter()
+                    .flat_map(|g| g.iter().filter_map(|a| a.index()))
+                    .collect::<Counter<u32>>();
+
+                // Union both sets
+                let mut all_alleles: Counter<_> = alleles1.clone();
+                all_alleles.extend(&alleles2);
+
+                // Define genetic position
+                let gd = match &gdistkey {
+                    Some(key) => record
+                        .info(key.as_bytes())
+                        .float()
+                        .ok()
+                        .flatten()
+                        .expect("Missing info field for genetic position")[0]
+                        as f64,
+                    None => record.pos() as f64 * rrate,
+                };
+
+                // Perform filtering and counting
+                if all_alleles.len() > 2 {
+                    skipped += 1;
+                    multiallelic += 1;
+                    None
+                } else if alleles1.is_empty() || alleles2.is_empty() {
+                    skipped += 1;
+                    if alleles1.is_empty() {
+                        miss_gt1 += 1;
+                    };
+                    if alleles2.is_empty() {
+                        miss_gt2 += 1;
+                    };
+                    None
+                } else if alleles2.len() == 1 || alleles2.values().min().copied()? == 1 {
+                    skipped += 1;
+                    monom_gt2 += 1;
+                    None
                 } else {
-                    gt2_g
+                    pass += 1;
+                    // Define reference allele as the minimum allele index
+                    let ref_ix = *all_alleles
+                        .keys()
+                        .min()
+                        .expect("Can't compute reference allele index");
+                    // Encode genotypes to compact i8 counts relative to ref allele
+                    let gt1 = gt1_g
                         .into_iter()
                         .map(|gt| gt2gcount(gt, ref_ix))
-                        .collect::<Vec<i8>>()
-                };
-                Some((record.pos() as usize, gt1, gt2, gd))
-            }
-        })
-        .multiunzip();
+                        .collect::<Vec<i8>>();
+                    // If phased, store haplotypes in gt2; else store dosages
+                    let gt2 = gt2_g
+                        .into_iter()
+                        .map(|gt| gt2gcount(gt, ref_ix))
+                        .collect::<Vec<i8>>();
+                    Some((record.pos() as usize, gt1, gt2, gd))
+                }
+            })
+            .multiunzip()
+    };
 
     // Assess everything looks good
     if gt1_data.len() != gt2_data.len() {
