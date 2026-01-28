@@ -39,7 +39,7 @@ pub struct GenoData {
 }
 
 // Genotypes to counts
-fn gt2gcount_legacy(gt: Genotype, ref_ix: u32) -> i8 {
+fn gt2gcount(gt: Genotype, ref_ix: u32) -> i8 {
     // Extract allele indices, ignoring missing
     let alleles: Vec<u32> = gt
         .iter()
@@ -62,8 +62,8 @@ fn gt2gcount_legacy(gt: Genotype, ref_ix: u32) -> i8 {
 }
 
 
-// Genotypes to counts
-fn gt2gcount(gt: Genotype, ref_ix: u32) -> i8 {
+// Genotypes to counts (alternative single-pass implementation)
+fn _gt2gcount(gt: Genotype, ref_ix: u32) -> i8 {
     // Single-pass count without allocating a temporary allele vector.
     let mut seen = false;
     let mut alt_count: i8 = 0;
@@ -282,7 +282,7 @@ fn indexed_xcf(
                     // Encode genotypes to compact i8 counts relative to ref allele
                     let gt1 = gt1_g
                         .into_iter()
-                        .map(|gt| gt2gcount(gt, ref_ix))
+                        .map(|gt| gt2gcount_legacy(gt, ref_ix))
                         .collect::<Vec<i8>>();
                     // If phased, store haplotypes in gt2; else store dosages
                     let gt2 = gt2_g
@@ -368,12 +368,12 @@ fn indexed_xcf(
                     // Encode genotypes to compact i8 counts relative to ref allele
                     let gt1 = gt1_g
                         .into_iter()
-                        .map(|gt| gt2gcount(gt, ref_ix))
+                        .map(|gt| gt2gcount_legacy(gt, ref_ix))
                         .collect::<Vec<i8>>();
                     // If phased, store haplotypes in gt2; else store dosages
                     let gt2 = gt2_g
                         .into_iter()
-                        .map(|gt| gt2gcount(gt, ref_ix))
+                        .map(|gt| gt2gcount_legacy(gt, ref_ix))
                         .collect::<Vec<i8>>();
                     Some((record.pos() as usize, gt1, gt2, gd))
                 }
@@ -545,7 +545,7 @@ fn readthrough_xcf(
                     // Encode genotypes to compact i8 counts relative to ref allele
                     let gt1 = gt1_g
                         .into_iter()
-                        .map(|gt| gt2gcount(gt, ref_ix))
+                        .map(|gt| gt2gcount_legacy(gt, ref_ix))
                         .collect::<Vec<i8>>();
                     // If phased, store haplotypes in gt2; else store dosages
                     let gt2 = gt2_g
@@ -638,12 +638,12 @@ fn readthrough_xcf(
                     // Encode genotypes to compact i8 counts relative to ref allele
                     let gt1 = gt1_g
                         .into_iter()
-                        .map(|gt| gt2gcount(gt, ref_ix))
+                        .map(|gt| gt2gcount_legacy(gt, ref_ix))
                         .collect::<Vec<i8>>();
                     // If phased, store haplotypes in gt2; else store dosages
                     let gt2 = gt2_g
                         .into_iter()
-                        .map(|gt| gt2gcount(gt, ref_ix))
+                        .map(|gt| gt2gcount_legacy(gt, ref_ix))
                         .collect::<Vec<i8>>();
                     Some((record.pos() as usize, gt1, gt2, gd))
                 }
