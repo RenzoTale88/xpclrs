@@ -39,6 +39,30 @@ pub struct GenoData {
 }
 
 // Genotypes to counts
+fn gt2gcount_legacy(gt: Genotype, ref_ix: u32) -> i8 {
+    // Extract allele indices, ignoring missing
+    let alleles: Vec<u32> = gt
+        .iter()
+        .filter_map(|a| a.index()) // skip missing
+        .collect();
+
+    if alleles.is_empty() {
+        // All missing
+        -9_i8
+    } else {
+        // Count how many are NOT the ref allele
+        let alt_count = alleles.iter().filter(|&&ix| ix != ref_ix).count() as i8;
+
+        if alt_count == 0 {
+            0
+        } else {
+            alt_count
+        }
+    }
+}
+
+
+// Genotypes to counts
 fn gt2gcount(gt: Genotype, ref_ix: u32) -> i8 {
     // Single-pass count without allocating a temporary allele vector.
     let mut seen = false;
@@ -209,11 +233,14 @@ fn indexed_xcf(
                     .iter()
                     .flat_map(|g| g.iter().filter_map(|&a: &GenotypeAllele| a.index()))
                     .collect::<Counter<u32>>();
-
                 let alleles2: Counter<u32> = gt2_g
                     .iter()
                     .flat_map(|g| g.iter().filter_map(|a| a.index()))
                     .collect::<Counter<u32>>();
+
+                // Union both sets
+                let mut all_alleles: Counter<_> = alleles1.clone();
+                all_alleles.extend(&alleles2);
 
                 // Define genetic position
                 let gd = match &gdistkey {
@@ -226,10 +253,6 @@ fn indexed_xcf(
                         as f64,
                     None => record.pos() as f64 * rrate,
                 };
-
-                // Union both sets
-                let mut all_alleles: Counter<_> = alleles1.clone();
-                all_alleles.extend(&alleles2);
 
                 // Perform filtering and counting
                 if all_alleles.len() > 2 {
@@ -296,11 +319,14 @@ fn indexed_xcf(
                     .iter()
                     .flat_map(|g| g.iter().filter_map(|&a: &GenotypeAllele| a.index()))
                     .collect::<Counter<u32>>();
-
                 let alleles2: Counter<u32> = gt2_g
                     .iter()
                     .flat_map(|g| g.iter().filter_map(|a| a.index()))
                     .collect::<Counter<u32>>();
+
+                // Union both sets
+                let mut all_alleles: Counter<_> = alleles1.clone();
+                all_alleles.extend(&alleles2);
 
                 // Define genetic position
                 let gd = match &gdistkey {
@@ -313,10 +339,6 @@ fn indexed_xcf(
                         as f64,
                     None => record.pos() as f64 * rrate,
                 };
-
-                // Union both sets
-                let mut all_alleles: Counter<_> = alleles1.clone();
-                all_alleles.extend(&alleles2);
 
                 // Perform filtering and counting
                 if all_alleles.len() > 2 {
