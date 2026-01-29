@@ -3,12 +3,10 @@ This module provides the I/O functions (e.g. VCF/BCF readers, text readers etc).
 */
 use crate::methods::XPCLRResult;
 use anyhow::Result;
-//use bed_reader::{Bed, ReadOptions, assert_eq_nan, sample_bed_file};
 use counter::Counter;
 use flate2::write;
 use flate2::Compression;
 use itertools::MultiUnzip;
-//use ndarray::{Array1, Array2, Axis};
 use rust_htslib::bcf::{
     self,
     record::{Genotype, GenotypeAllele},
@@ -24,7 +22,7 @@ use std::{
     path::Path,
 };
 
-// Define multople readers for the indexed and unindexed XCF file
+// Define multiple readers for the indexed and unindexed XCF file
 pub enum XcfReader {
     Indexed(bcf::IndexedReader),
     Readthrough(bcf::Reader),
