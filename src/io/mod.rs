@@ -3,10 +3,12 @@ This module provides the I/O functions (e.g. VCF/BCF readers, text readers etc).
 */
 use crate::methods::XPCLRResult;
 use anyhow::Result;
+//use bed_reader::{Bed, ReadOptions, assert_eq_nan, sample_bed_file};
 use counter::Counter;
 use flate2::write;
 use flate2::Compression;
 use itertools::MultiUnzip;
+//use ndarray::{Array1, Array2, Axis};
 use rust_htslib::bcf::{
     self,
     record::{Genotype, GenotypeAllele},
@@ -38,32 +40,8 @@ pub struct GenoData {
     pub gdistances: Vec<f64>,
 }
 
-// Genotypes to counts
+// Genotypes to counts (optimized single-pass implementation)
 fn gt2gcount(gt: Genotype, ref_ix: u32) -> i8 {
-    // Extract allele indices, ignoring missing
-    let alleles: Vec<u32> = gt
-        .iter()
-        .filter_map(|a| a.index()) // skip missing
-        .collect();
-
-    if alleles.is_empty() {
-        // All missing
-        -9_i8
-    } else {
-        // Count how many are NOT the ref allele
-        let alt_count = alleles.iter().filter(|&&ix| ix != ref_ix).count() as i8;
-
-        if alt_count == 0 {
-            0
-        } else {
-            alt_count
-        }
-    }
-}
-
-
-// Genotypes to counts (alternative single-pass implementation)
-fn _gt2gcount(gt: Genotype, ref_ix: u32) -> i8 {
     // Single-pass count without allocating a temporary allele vector.
     let mut seen = false;
     let mut alt_count: i8 = 0;
@@ -83,10 +61,8 @@ fn _gt2gcount(gt: Genotype, ref_ix: u32) -> i8 {
     }
 }
 
-// Convert genotypes in the appropriate form
-// (Phased haplotype conversion not used with compact storage)
 
-/// Same as smakcr, but single threaded for now
+/// Read XCF file, either indexed or unindexed
 pub fn read_xcf<P: AsRef<Path> + Display>(path: P, has_index: bool) -> Result<XcfReader> {
     let xcf_reader: XcfReader = if has_index {
         XcfReader::Indexed(
@@ -98,7 +74,7 @@ pub fn read_xcf<P: AsRef<Path> + Display>(path: P, has_index: bool) -> Result<Xc
     Ok(xcf_reader)
 }
 
-/// Same as smakcr, but single threaded for now
+/// Read file, either compressed or uncompressed
 pub fn read_file<P: AsRef<Path> + Display>(
     path: P,
 ) -> Result<impl Iterator<Item = Result<String>>> {
@@ -163,11 +139,12 @@ fn indexed_xcf(
     chrom: &str,
     start: u64,
     end: Option<u64>,
-    (phased, rrate, gdistkey): (Option<bool>, Option<f64>, Option<String>),
+    (phased, rrate, gdistkey, n_threads): (Option<bool>, Option<f64>, Option<String>, usize),
 ) -> Result<GenoData> {
     log::info!("Indexed reader.");
     // Prepare the indexed reader
     let mut reader = IndexedReader::from_path(xcf_fn).expect("Cannot load indexed BCF/VCF file");
+    reader.set_threads(n_threads).expect("Failed to set threads");
     let rrate = rrate.unwrap_or(1e-8);
     // Resolve options once to avoid per-record branching.
     let phased = phased.unwrap_or(false);
@@ -228,19 +205,27 @@ fn indexed_xcf(
                     .iter()
                     .map(|i| genotypes.get(*i))
                     .collect::<Vec<Genotype>>();
-                // Check that the site is biallelic
-                let alleles1: Counter<u32> = gt1_g
-                    .iter()
-                    .flat_map(|g| g.iter().filter_map(|&a: &GenotypeAllele| a.index()))
-                    .collect::<Counter<u32>>();
-                let alleles2: Counter<u32> = gt2_g
-                    .iter()
-                    .flat_map(|g| g.iter().filter_map(|a| a.index()))
-                    .collect::<Counter<u32>>();
+                
+                // Count alleles from both populations in a single pass
+                let mut alleles1: Counter<u32> = Counter::new();
+                let mut alleles2: Counter<u32> = Counter::new();
+                
+                for g in &gt1_g {
+                    for a in g.iter().filter_map(|a| a.index()) {
+                        alleles1[&a] += 1;
+                    }
+                }
+                for g in &gt2_g {
+                    for a in g.iter().filter_map(|a| a.index()) {
+                        alleles2[&a] += 1;
+                    }
+                }
 
                 // Union both sets
-                let mut all_alleles: Counter<_> = alleles1.clone();
-                all_alleles.extend(&alleles2);
+                let all_alleles: Counter<u32> = alleles1.iter()
+                    .chain(alleles2.iter())
+                    .map(|(&k, &v)| (k, v))
+                    .collect();
 
                 // Define genetic position
                 let gd = match &gdistkey {
@@ -280,21 +265,21 @@ fn indexed_xcf(
                         .min()
                         .expect("Can't compute reference allele index");
                     // Encode genotypes to compact i8 counts relative to ref allele
-                    let gt1 = gt1_g
-                        .into_iter()
-                        .map(|gt| gt2gcount_legacy(gt, ref_ix))
-                        .collect::<Vec<i8>>();
+                    let mut gt1 = Vec::with_capacity(gt1_g.len());
+                    for gt in gt1_g {
+                        gt1.push(gt2gcount(gt, ref_ix));
+                    }
                     // If phased, store haplotypes in gt2; else store dosages
-                    let gt2 = gt2_g
-                        .iter()
-                        .flat_map(|gt| {
-                            gt.iter().map(|a| match a {
+                    let mut gt2 = Vec::with_capacity(gt2_g.len() * 2);
+                    for gt in &gt2_g {
+                        for a in gt.iter() {
+                            gt2.push(match a {
                                 GenotypeAllele::PhasedMissing => -9_i8,
                                 GenotypeAllele::UnphasedMissing => -9_i8,
                                 _ => a.index().unwrap() as i8,
-                            })
-                        })
-                        .collect::<Vec<i8>>();
+                            });
+                        }
+                    }
                     Some((record.pos() as usize, gt1, gt2, gd))
                 }
             })
@@ -314,19 +299,27 @@ fn indexed_xcf(
                     .iter()
                     .map(|i| genotypes.get(*i))
                     .collect::<Vec<Genotype>>();
-                // Check that the site is biallelic
-                let alleles1: Counter<u32> = gt1_g
-                    .iter()
-                    .flat_map(|g| g.iter().filter_map(|&a: &GenotypeAllele| a.index()))
-                    .collect::<Counter<u32>>();
-                let alleles2: Counter<u32> = gt2_g
-                    .iter()
-                    .flat_map(|g| g.iter().filter_map(|a| a.index()))
-                    .collect::<Counter<u32>>();
+                
+                // Count alleles from both populations in a single pass
+                let mut alleles1: Counter<u32> = Counter::new();
+                let mut alleles2: Counter<u32> = Counter::new();
+                
+                for g in &gt1_g {
+                    for a in g.iter().filter_map(|a| a.index()) {
+                        alleles1[&a] += 1;
+                    }
+                }
+                for g in &gt2_g {
+                    for a in g.iter().filter_map(|a| a.index()) {
+                        alleles2[&a] += 1;
+                    }
+                }
 
                 // Union both sets
-                let mut all_alleles: Counter<_> = alleles1.clone();
-                all_alleles.extend(&alleles2);
+                let all_alleles: Counter<u32> = alleles1.iter()
+                    .chain(alleles2.iter())
+                    .map(|(&k, &v)| (k, v))
+                    .collect();
 
                 // Define genetic position
                 let gd = match &gdistkey {
@@ -366,15 +359,15 @@ fn indexed_xcf(
                         .min()
                         .expect("Can't compute reference allele index");
                     // Encode genotypes to compact i8 counts relative to ref allele
-                    let gt1 = gt1_g
-                        .into_iter()
-                        .map(|gt| gt2gcount_legacy(gt, ref_ix))
-                        .collect::<Vec<i8>>();
+                    let mut gt1 = Vec::with_capacity(gt1_g.len());
+                    for gt in gt1_g {
+                        gt1.push(gt2gcount(gt, ref_ix));
+                    }
                     // If phased, store haplotypes in gt2; else store dosages
-                    let gt2 = gt2_g
-                        .into_iter()
-                        .map(|gt| gt2gcount_legacy(gt, ref_ix))
-                        .collect::<Vec<i8>>();
+                    let mut gt2 = Vec::with_capacity(gt2_g.len());
+                    for gt in gt2_g {
+                        gt2.push(gt2gcount(gt, ref_ix));
+                    }
                     Some((record.pos() as usize, gt1, gt2, gd))
                 }
             })
@@ -418,13 +411,14 @@ fn readthrough_xcf(
     chrom: &str,
     start: u64,
     end: Option<u64>,
-    (phased, rrate, gdistkey): (Option<bool>, Option<f64>, Option<String>),
+    (phased, rrate, gdistkey, n_threads): (Option<bool>, Option<f64>, Option<String>, usize),
 ) -> Result<GenoData> {
     log::info!("Streamed reader.");
     log::info!("This is substantially slower than the indexed one.");
     log::info!("Consider generating an index for your BCF/VCF file.");
     // Prepare the indexed reader
     let mut reader = Reader::from_path(xcf_fn).expect("Cannot load indexed BCF/VCF file");
+    reader.set_threads(n_threads).expect("Failed to set threads");
     let end = end.unwrap_or(999999999);
     let rrate = rrate.unwrap_or(1e-8);
     // Resolve options once to avoid per-record branching.
@@ -490,20 +484,26 @@ fn readthrough_xcf(
                     .map(|i| genotypes.get(*i))
                     .collect::<Vec<Genotype>>();
 
-                // Check that the site is biallelic
-                let alleles1: Counter<u32> = gt1_g
-                    .iter()
-                    .flat_map(|g| g.iter().filter_map(|&a: &GenotypeAllele| a.index()))
-                    .collect::<Counter<u32>>();
-
-                let alleles2: Counter<u32> = gt2_g
-                    .iter()
-                    .flat_map(|g| g.iter().filter_map(|a| a.index()))
-                    .collect::<Counter<u32>>();
+                // Count alleles from both populations in a single pass
+                let mut alleles1: Counter<u32> = Counter::new();
+                let mut alleles2: Counter<u32> = Counter::new();
+                
+                for g in &gt1_g {
+                    for a in g.iter().filter_map(|a| a.index()) {
+                        alleles1[&a] += 1;
+                    }
+                }
+                for g in &gt2_g {
+                    for a in g.iter().filter_map(|a| a.index()) {
+                        alleles2[&a] += 1;
+                    }
+                }
 
                 // Union both sets
-                let mut all_alleles: Counter<_> = alleles1.clone();
-                all_alleles.extend(&alleles2);
+                let all_alleles: Counter<u32> = alleles1.iter()
+                    .chain(alleles2.iter())
+                    .map(|(&k, &v)| (k, v))
+                    .collect();
 
                 // Define genetic position
                 let gd = match &gdistkey {
@@ -543,21 +543,21 @@ fn readthrough_xcf(
                         .min()
                         .expect("Can't compute reference allele index");
                     // Encode genotypes to compact i8 counts relative to ref allele
-                    let gt1 = gt1_g
-                        .into_iter()
-                        .map(|gt| gt2gcount_legacy(gt, ref_ix))
-                        .collect::<Vec<i8>>();
+                    let mut gt1 = Vec::with_capacity(gt1_g.len());
+                    for gt in gt1_g {
+                        gt1.push(gt2gcount(gt, ref_ix));
+                    }
                     // If phased, store haplotypes in gt2; else store dosages
-                    let gt2 = gt2_g
-                        .iter()
-                        .flat_map(|gt| {
-                            gt.iter().map(|a| match a {
+                    let mut gt2 = Vec::with_capacity(gt2_g.len() * 2);
+                    for gt in &gt2_g {
+                        for a in gt.iter() {
+                            gt2.push(match a {
                                 GenotypeAllele::PhasedMissing => -9_i8,
                                 GenotypeAllele::UnphasedMissing => -9_i8,
                                 _ => a.index().unwrap() as i8,
-                            })
-                        })
-                        .collect::<Vec<i8>>();
+                            });
+                        }
+                    }
                     Some((record.pos() as usize, gt1, gt2, gd))
                 }
             })
@@ -583,20 +583,26 @@ fn readthrough_xcf(
                     .map(|i| genotypes.get(*i))
                     .collect::<Vec<Genotype>>();
 
-                // Check that the site is biallelic
-                let alleles1: Counter<u32> = gt1_g
-                    .iter()
-                    .flat_map(|g| g.iter().filter_map(|&a: &GenotypeAllele| a.index()))
-                    .collect::<Counter<u32>>();
-
-                let alleles2: Counter<u32> = gt2_g
-                    .iter()
-                    .flat_map(|g| g.iter().filter_map(|a| a.index()))
-                    .collect::<Counter<u32>>();
+                // Count alleles from both populations in a single pass
+                let mut alleles1: Counter<u32> = Counter::new();
+                let mut alleles2: Counter<u32> = Counter::new();
+                
+                for g in &gt1_g {
+                    for a in g.iter().filter_map(|a| a.index()) {
+                        alleles1[&a] += 1;
+                    }
+                }
+                for g in &gt2_g {
+                    for a in g.iter().filter_map(|a| a.index()) {
+                        alleles2[&a] += 1;
+                    }
+                }
 
                 // Union both sets
-                let mut all_alleles: Counter<_> = alleles1.clone();
-                all_alleles.extend(&alleles2);
+                let all_alleles: Counter<u32> = alleles1.iter()
+                    .chain(alleles2.iter())
+                    .map(|(&k, &v)| (k, v))
+                    .collect();
 
                 // Define genetic position
                 let gd = match &gdistkey {
@@ -636,15 +642,15 @@ fn readthrough_xcf(
                         .min()
                         .expect("Can't compute reference allele index");
                     // Encode genotypes to compact i8 counts relative to ref allele
-                    let gt1 = gt1_g
-                        .into_iter()
-                        .map(|gt| gt2gcount_legacy(gt, ref_ix))
-                        .collect::<Vec<i8>>();
+                    let mut gt1 = Vec::with_capacity(gt1_g.len());
+                    for gt in gt1_g {
+                        gt1.push(gt2gcount(gt, ref_ix));
+                    }
                     // If phased, store haplotypes in gt2; else store dosages
-                    let gt2 = gt2_g
-                        .into_iter()
-                        .map(|gt| gt2gcount_legacy(gt, ref_ix))
-                        .collect::<Vec<i8>>();
+                    let mut gt2 = Vec::with_capacity(gt2_g.len());
+                    for gt in gt2_g {
+                        gt2.push(gt2gcount(gt, ref_ix));
+                    }
                     Some((record.pos() as usize, gt1, gt2, gd))
                 }
             })
@@ -689,7 +695,7 @@ pub fn process_xcf(
     chrom: &str,
     start: Option<u64>,
     end: Option<u64>,
-    (phased, rrate, gdistkey): (Option<bool>, Option<f64>, Option<String>),
+    (phased, rrate, gdistkey, n_threads): (Option<bool>, Option<f64>, Option<String>, usize),
 ) -> Result<GenoData> {
     // Process the data depending on the presence of the index
     let start = start.unwrap_or(0);
@@ -698,8 +704,8 @@ pub fn process_xcf(
     let csi_path = format!("{xcf_fn}.csi");
     let has_index = Path::exists(Path::new(&tbi_path)) || Path::exists(Path::new(&csi_path));
     let g_data = match has_index {
-        true => indexed_xcf(xcf_fn, s1, s2, chrom, start, end, (phased, rrate, gdistkey)),
-        false => readthrough_xcf(xcf_fn, s1, s2, chrom, start, end, (phased, rrate, gdistkey)),
+        true => indexed_xcf(xcf_fn, s1, s2, chrom, start, end, (phased, rrate, gdistkey, n_threads)),
+        false => readthrough_xcf(xcf_fn, s1, s2, chrom, start, end, (phased, rrate, gdistkey, n_threads)),
     }
     .expect("Failed to parse the VCF/BCF file");
     Ok(g_data)
