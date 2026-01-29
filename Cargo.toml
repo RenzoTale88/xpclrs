@@ -11,6 +11,7 @@ categories = ["bioinformatics"]
 
 [dependencies]
 anyhow           = "1.0.98"
+bed-reader       = "1.0.6"
 clap             = "4.5.42"
 counter          = "0.7.0"
 env_logger       = "0.11"
