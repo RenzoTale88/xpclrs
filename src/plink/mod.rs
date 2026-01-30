@@ -110,9 +110,17 @@ pub fn read_plink_files(
     let s2 = consolidate_list(&sample_ids, s2).expect("Failed to subset sampleB");
     // Fetch the indices of each sample in each list
     let i1 = get_gt_index(&sample_ids, &s1).expect("Failed to get indeces of sampleA");
-    let i2 = get_gt_index(&sample_ids, &s2).expect("Failed to get indeces of sampleB");
+    let i2 = get_gt_index(&sample_ids, &s2).expect("Failed to get indeces of sampleB");    
+    
+    // Print number of samples
+    log::info!("Samples A: {}", i1.len());
+    log::info!("Samples B: {}", i2.len());
 
-    log::info!("Number of samples: {}", n_samples);
+    // Dies if no samples are retained
+    if s1.is_empty() || s2.is_empty() {
+        eprintln!("No samples found in the lists.");
+        std::process::exit(1);
+    }
 
     // Read .bim file to get number of SNPs and IDs
     let bim_path = format!("{}.bim", prefix);
