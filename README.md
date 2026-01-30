@@ -30,6 +30,8 @@ xpclrs --help
 ## Input
 The software requires the following mandatory options:
 1. Input genotypes in VCF(.GZ)/BCF format with `-I-`/`--input`.
+    1. PLINK binary files (BED/BIM/FAM) are also supported by providing the root of the file name in `--input` and providing the `--plink` options.
+    1. Loading in plink file is substantially faster than using the VCF format, but worth noticing that it can lead to different results due to the variants being coded as major/minor rather than REF/ALT (XP-CLR relies on allele frequencies).
 2. The lists of individuals in each group (one individual per line) with `-A`/`--samplesA` and `-B`/`--samplesB`.
 3. The sequence to analyse with `-C`/`--chr`.
 

@@ -2,7 +2,7 @@ use clap::{builder::PossibleValue, value_parser, Arg, ArgAction, Command};
 use env_logger::{self, Env};
 use rayon::current_num_threads;
 use xpclrs::{
-    io::{process_xcf, read_file, to_table, write_table},
+    io::{process_plink, process_xcf, read_file, to_table, write_table},
     methods::xpclr,
 };
 
@@ -23,11 +23,11 @@ fn main() {
         .author("Andrea Talenti <andrea.talenti@ed.ac.uk>")
         .about("Compute the XP-CLR for a pair of populations from a VCF file.\nMethods presented by Chen H, Patterson N, Reich D. Population differentiation as a test for selective sweeps. Genome Res. 2010 Mar;20(3):393-402. doi: 10.1101/gr.100545.109. Epub 2010 Jan 19. PMID: 20086244; PMCID: PMC2840981.\nOriginal implementation is available at https://github.com/hardingnj/xpclr/\n")
         .arg(
-            Arg::new("VCF")
+            Arg::new("INPUT")
                 .short('I')
                 .long("input")
                 .required(true)
-                .help("input VCF file"),
+                .help("input file(s)"),
         )
         .arg(
             Arg::new("OUT")
@@ -123,7 +123,7 @@ fn main() {
                 .long("phased")
                 .required(false)
                 .action(ArgAction::SetTrue)
-                .help("Whether data is phased for more precise r2 calculation."),
+                .help("Whether data is phased for more precise r2 calculation (does not work with --plink)."),
         )
         .arg(
             Arg::new("CHROM")
@@ -166,6 +166,13 @@ fn main() {
                 .help("Run analysis in fast mode (faster integration, but gives results that are less accurate compared with the original tool)"),
         )
         .arg(
+            Arg::new("PLINK")
+                .long("plink")
+                .required(false)
+                .action(ArgAction::SetTrue)
+                .help("Input is in PLINK binary format (.bed/.bim/.fam) rather than VCF/BCF; EXPERIMENTAL."),
+        )
+        .arg(
             Arg::new("LOG")
                 .short('l')
                 .long("log")
@@ -201,11 +208,12 @@ fn main() {
     let distkey = matches.get_one::<String>("DISTKEYS").cloned();
     let phased = matches.get_one::<bool>("PHASED").copied();
     let fast = matches.get_one::<bool>("FAST").copied();
+    let plink = matches.get_one::<bool>("PLINK").copied().unwrap_or(false);
 
-    // Get the VCF
-    let xcf_path = matches
-        .get_one::<String>("VCF")
-        .expect("VCF file is required")
+    // Get the input file
+    let input_path = matches
+        .get_one::<String>("INPUT")
+        .expect("Input file is required")
         .to_owned();
 
     // Get the output path
@@ -243,16 +251,27 @@ fn main() {
         .collect::<Vec<String>>();
 
     // Load VCF file
-    let g_data = process_xcf(
-        xcf_path,
-        &samples_a,
-        &samples_b,
-        &chrom,
-        start,
-        end,
-        (phased, rrate, distkey, n_threads),
-    )
-    .expect("Failed to read the VCF/BCF file");
+    let g_data = if plink {
+        process_plink(
+            input_path,
+            &samples_a,
+            &samples_b,
+            &chrom,
+            start,
+            end,
+            (phased, rrate),
+        )
+    } else {
+        process_xcf(
+            input_path,
+            &samples_a,
+            &samples_b,
+            &chrom,
+            start,
+            end,
+            (phased, rrate, distkey, n_threads),
+        )
+    }.expect("Failed loading genotype data");
 
     // Establish the windows
     let end = match end {
