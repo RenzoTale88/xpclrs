@@ -30,9 +30,10 @@ xpclrs --help
 ## Input
 The software requires the following mandatory options:
 1. Input genotypes in VCF(.GZ)/BCF format with `-I-`/`--input`.
-    1. PLINK binary files (BED/BIM/FAM) are also supported by providing the root of the file name in `--input` and providing the `--plink` options.
-    1. Loading in plink file is substantially faster than using the VCF format, but worth noticing that it can lead to different results due to the variants being coded as major/minor rather than REF/ALT (XP-CLR relies on allele frequencies).
+    * PLINK binary files (BED/BIM/FAM) are also supported by providing the root of the file name in `--input` and providing the `--plink` options.
+    * Loading in plink file is substantially faster than using the VCF format, but worth noticing that it can lead to different results due to the variants being coded as major/minor rather than REF/ALT (XP-CLR relies on allele frequencies).
 2. The lists of individuals in each group (one individual per line) with `-A`/`--samplesA` and `-B`/`--samplesB`.
+    * PLINK samples are loaded as `FID_IID`. So if your sample in the FAM file is `POP1 SAMP1 0 0 0 -9`, the sample will be listed as `POP1_SAMP1` in the group of individuals.
 3. The sequence to analyse with `-C`/`--chr`.
 
 The VCF can optionally include a genetic distance key, that can be specified with the `--gdistkey [NAME]`. Alternatively, users can provide the recombination rate with the `-R`/`--rrate` option.
