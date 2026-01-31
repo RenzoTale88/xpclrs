@@ -36,7 +36,7 @@ The software requires the following mandatory options:
     * PLINK samples are loaded as `FID_IID`. So if your sample in the FAM file is `POP1 SAMP1 0 0 0 -9`, the sample will be listed as `POP1_SAMP1` in the group of individuals.
 3. The sequence to analyse with `-C`/`--chr`.
 
-The VCF can optionally include a genetic distance key, that can be specified with the `--gdistkey [NAME]`. Alternatively, users can provide the recombination rate with the `-R`/`--rrate` option.
+The VCF can optionally include a genetic distance key, that can be specified with the `--gdistkey [NAME]`. Alternatively, users can provide the recombination rate with the `-R`/`--rrate` option. For PLINK inputs, the software will automatically detect the presence of a genetic position in the dataset and use that; if the value is equal to 0, the script will compute the genetic position based on the physical position and the recombination rate. Ensure that there are not gaps in the genetic position (i.e. a 0 following a known genetic position).
 
 The analysis can be further sped up using multithreading with the `--threads`/`-t` option, followed by the number of threads to use. If set to 0, the software will try to use all the threads available.
 
