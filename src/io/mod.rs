@@ -28,7 +28,13 @@ pub struct GenoData {
     pub gdistances: Vec<f64>,
 }
 
-// Genotypes to counts (optimized single-pass implementation)
+/// Convert a genotype into an alternate-allele count relative to `ref_ix`.
+///
+/// # Examples
+///
+/// ```ignore
+/// let count = xpclrs::io::gt2gcount(genotype, 0);
+/// ```
 pub fn gt2gcount(gt: Genotype, ref_ix: u32) -> i8 {
     // Single-pass count without allocating a temporary allele vector.
     let mut seen = false;
@@ -49,7 +55,14 @@ pub fn gt2gcount(gt: Genotype, ref_ix: u32) -> i8 {
     }
 }
 
-/// Read file, either compressed or uncompressed
+/// Read file contents, either compressed or uncompressed.
+///
+/// # Examples
+///
+/// ```ignore
+/// let records = xpclrs::io::read_file("data.txt")?;
+/// for line in records { println!("{}", line?); }
+/// ```
 pub fn read_file<P: AsRef<Path> + Display>(
     path: P,
 ) -> Result<impl Iterator<Item = Result<String>>> {
@@ -79,7 +92,15 @@ pub fn read_file<P: AsRef<Path> + Display>(
     Ok(records)
 }
 
-// Consolidate the list
+/// Keep only sample IDs present in `full_list`.
+///
+/// # Examples
+///
+/// ```ignore
+/// let full: Vec<&[u8]> = vec![b"s1", b"s2"];
+/// let subset = vec!["s2".to_string()];
+/// let out = xpclrs::io::consolidate_list(&full, &subset).unwrap();
+/// ```
 pub fn consolidate_list(full_list: &Vec<&[u8]>, subset: &[String]) -> Result<Vec<String>> {
     let filtered = subset
         .iter()
@@ -89,7 +110,15 @@ pub fn consolidate_list(full_list: &Vec<&[u8]>, subset: &[String]) -> Result<Vec
     Ok(filtered)
 }
 
-// Function to get the index of each sample in the lists
+/// Return indices of `subset` elements within `full_list`.
+///
+/// # Examples
+///
+/// ```ignore
+/// let full: Vec<&[u8]> = vec![b"s1", b"s2", b"s3"];
+/// let subset = vec!["s3".to_string()];
+/// let idx = xpclrs::io::get_gt_index(&full, &subset).unwrap();
+/// ```
 pub fn get_gt_index(full_list: &Vec<&[u8]>, subset: &[String]) -> Result<Vec<usize>> {
     let subset_set: HashSet<_> = subset.iter().collect();
     let indices: Vec<usize> = full_list
@@ -106,7 +135,13 @@ pub fn get_gt_index(full_list: &Vec<&[u8]>, subset: &[String]) -> Result<Vec<usi
     Ok(indices)
 }
 
-// Load the genotypes for the given samples
+/// Load genotypes from an XCF (VCF/BCF) file into `GenoData`.
+///
+/// # Examples
+///
+/// ```ignore
+/// let data = xpclrs::io::process_xcf("in.bcf".to_string(), &s1, &s2, "1", None, None, (None, None, None, 1)).unwrap();
+/// ```
 pub fn process_xcf(
     xcf_fn: String,
     s1: &[String],
@@ -146,7 +181,13 @@ pub fn process_xcf(
     Ok(g_data)
 }
 
-// Load the genotypes for the given samples
+/// Load genotypes from PLINK BED/BIM/FAM files into `GenoData`.
+///
+/// # Examples
+///
+/// ```ignore
+/// let data = xpclrs::io::process_plink("data/plink".to_string(), &s1, &s2, "1", None, None, (None, None)).unwrap();
+/// ```
 pub fn process_plink(
     plink_root: String,
     s1: &[String],
@@ -164,6 +205,13 @@ pub fn process_plink(
     Ok(g_data)
 }
 
+/// Create a buffered writer for plain or gzipped output.
+///
+/// # Examples
+///
+/// ```ignore
+/// let mut w = xpclrs::io::write_table("out.tsv");
+/// ```
 pub fn write_table(filename: &str) -> Box<dyn Write> {
     let path = Path::new(filename);
     let file = File::create(path)
@@ -183,10 +231,17 @@ pub fn write_table(filename: &str) -> Box<dyn Write> {
     writer
 }
 
-// The following results
-// n, (start, stop, bpi, bpe, nsnps, avail), (model_li, null_li, selectionc)
-// Map to:
-// win index, (start and stop of window), (bpi and bpe are edges),
+/// Write XP-CLR results to a delimited table.
+/// The following results
+/// n, (start, stop, bpi, bpe, nsnps, avail), (model_li, null_li, selectionc)
+/// Map to:
+/// win index, (start and stop of window), (bpi and bpe are edges),
+///
+/// # Examples
+///
+/// ```ignore
+/// xpclrs::io::to_table("1", &results, &mut writer, "tsv").unwrap();
+/// ```
 pub fn to_table(
     chrom: &str,
     xpclr_res: &[(usize, XPCLRResult)],

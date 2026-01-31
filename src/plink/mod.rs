@@ -69,6 +69,13 @@ fn bed_ind_major(bed_file: &mut File, n_snps: usize, n_samples: usize) -> Vec<Ve
     gts
 }
 
+/// Read PLINK BED/BIM/FAM files and return filtered `GenoData`.
+///
+/// # Examples
+///
+/// ```ignore
+/// let data = xpclrs::plink::read_plink_files("data/plink", &s1, &s2, "1", 0, None, (None, None)).unwrap();
+/// ```
 pub fn read_plink_files(
     prefix: &str,
     s1: &[String],
@@ -183,21 +190,22 @@ pub fn read_plink_files(
                 // Compute genetic distance if requested
                 let gd = *position as f64 * rrate.unwrap_or(1e-8);
                 // Prepare GT1 and GT2
+                // Usually, 00, 10 and 11 mean 2, 1 and 0 minor allele counts respectively
                 let gt1 = i1
                     .iter()
                     .map(|&i| match snp[i] {
-                        0b00 => 0_i8,
+                        0b00 => 2_i8,
                         0b10 => 1_i8,
-                        0b11 => 2_i8,
+                        0b11 => 0_i8,
                         _ => -9_i8,
                     })
                     .collect::<Vec<i8>>();
                 let gt2 = i2
                     .iter()
                     .map(|&i| match snp[i] {
-                        0b00 => 0_i8,
+                        0b00 => 2_i8,
                         0b10 => 1_i8,
-                        0b11 => 2_i8,
+                        0b11 => 0_i8,
                         _ => -9_i8,
                     })
                     .collect::<Vec<i8>>();

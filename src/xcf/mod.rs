@@ -18,7 +18,13 @@ pub enum XcfReader {
     Readthrough(Reader),
 }
 
-/// Read XCF file, either indexed or unindexed
+/// Read an XCF (VCF/BCF) file, either indexed or unindexed.
+///
+/// # Examples
+///
+/// ```ignore
+/// let reader = xpclrs::xcf::read_xcf("in.bcf", true).unwrap();
+/// ```
 pub fn read_xcf<P: AsRef<Path> + Display>(path: P, has_index: bool) -> Result<XcfReader> {
     let xcf_reader: XcfReader = if has_index {
         XcfReader::Indexed(
@@ -30,7 +36,13 @@ pub fn read_xcf<P: AsRef<Path> + Display>(path: P, has_index: bool) -> Result<Xc
     Ok(xcf_reader)
 }
 
-// Process indexed XCF file
+/// Process an indexed XCF file into `GenoData`.
+///
+/// # Examples
+///
+/// ```ignore
+/// let data = xpclrs::xcf::indexed_xcf("in.bcf".to_string(), &s1, &s2, "1", 0, None, (None, None, None, 1)).unwrap();
+/// ```
 pub fn indexed_xcf(
     xcf_fn: String,
     s1: &[String],
@@ -306,7 +318,13 @@ pub fn indexed_xcf(
     })
 }
 
-// Process unindexed XCF
+/// Process an unindexed XCF file into `GenoData`.
+///
+/// # Examples
+///
+/// ```ignore
+/// let data = xpclrs::xcf::readthrough_xcf("in.bcf".to_string(), &s1, &s2, "1", 0, None, (None, None, None, 1)).unwrap();
+/// ```
 pub fn readthrough_xcf(
     xcf_fn: String,
     s1: &[String],

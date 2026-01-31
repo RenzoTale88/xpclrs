@@ -23,16 +23,40 @@ struct AlleleFreqs {
     pub alt_freqs2: Vec<f64>,
 }
 
-// Drafted bisect left and right
+/// Create a bisector over an ordered slice.
+///
+/// # Examples
+///
+/// ```ignore
+/// let data = vec![1, 2, 3];
+/// let b = xpclrs::methods::Bisector::new(&data);
+/// ```
 pub struct Bisector<'a, T> {
     data: &'a [T],
 }
 
 impl<'a, T: Ord> Bisector<'a, T> {
+    /// Create a bisector over an ordered slice.
+    ///
+    /// # Examples
+    ///
+    /// ```ignore
+    /// let data = vec![1, 2, 3];
+    /// let b = xpclrs::methods::Bisector::new(&data);
+    /// ```
     pub fn new(data: &'a [T]) -> Self {
         Bisector { data }
     }
 
+    /// Return the leftmost insertion index for `x`.
+    ///
+    /// # Examples
+    ///
+    /// ```ignore
+    /// let data = vec![1, 2, 2, 3];
+    /// let b = xpclrs::methods::Bisector::new(&data);
+    /// assert_eq!(b.bisect_left(&2), 1);
+    /// ```
     pub fn bisect_left(&self, x: &T) -> usize {
         let mut low = 0;
         let mut high = self.data.len();
@@ -47,6 +71,15 @@ impl<'a, T: Ord> Bisector<'a, T> {
         low
     }
 
+    /// Return the rightmost insertion index for `x`.
+    ///
+    /// # Examples
+    ///
+    /// ```ignore
+    /// let data = vec![1, 2, 2, 3];
+    /// let b = xpclrs::methods::Bisector::new(&data);
+    /// assert_eq!(b.bisect_right(&2), 3);
+    /// ```
     pub fn bisect_right(&self, x: &T) -> usize {
         let mut low = 0;
         let mut high = self.data.len();
@@ -62,16 +95,40 @@ impl<'a, T: Ord> Bisector<'a, T> {
     }
 }
 
-// PartialOrd bisector
+/// Create a bisector over a partially ordered slice.
+///
+/// # Examples
+///
+/// ```ignore
+/// let data = vec![0.1_f64, 0.2, 0.3];
+/// let b = xpclrs::methods::PartialBisector::new(&data);
+/// ```
 pub struct PartialBisector<'a, T> {
     data: &'a [T],
 }
 
 impl<'a, T: PartialOrd> PartialBisector<'a, T> {
+    /// Create a bisector over a partially ordered slice.
+    ///
+    /// # Examples
+    ///
+    /// ```ignore
+    /// let data = vec![0.1_f64, 0.2, 0.3];
+    /// let b = xpclrs::methods::PartialBisector::new(&data);
+    /// ```
     pub fn new(data: &'a [T]) -> Self {
         PartialBisector { data }
     }
 
+    /// Return the leftmost insertion index for `x` using partial ordering.
+    ///
+    /// # Examples
+    ///
+    /// ```ignore
+    /// let data = vec![0.1_f64, 0.2, 0.2, 0.5];
+    /// let b = xpclrs::methods::PartialBisector::new(&data);
+    /// assert_eq!(b.bisect_left(&0.2), 1);
+    /// ```
     pub fn bisect_left(&self, x: &T) -> usize {
         let mut low = 0;
         let mut high = self.data.len();
@@ -86,6 +143,15 @@ impl<'a, T: PartialOrd> PartialBisector<'a, T> {
         low
     }
 
+    /// Return the rightmost insertion index for `x` using partial ordering.
+    ///
+    /// # Examples
+    ///
+    /// ```ignore
+    /// let data = vec![0.1_f64, 0.2, 0.2, 0.5];
+    /// let b = xpclrs::methods::PartialBisector::new(&data);
+    /// assert_eq!(b.bisect_right(&0.2), 3);
+    /// ```
     pub fn bisect_right(&self, x: &T) -> usize {
         let mut low = 0;
         let mut high = self.data.len();
@@ -101,7 +167,13 @@ impl<'a, T: PartialOrd> PartialBisector<'a, T> {
     }
 }
 
-// Compute the omega
+/// Estimate omega from allele frequencies of two populations.
+///
+/// # Examples
+///
+/// ```ignore
+/// let w = xpclrs::methods::est_omega(&[0.1, 0.2], &[0.3, 0.4]).unwrap();
+/// ```
 pub fn est_omega(q1: &[f64], q2: &[f64]) -> Result<f64> {
     if q2.contains(&0.0) || q2.contains(&1.0) {
         eprintln!("No SNPs in p2 can be fixed.");
@@ -117,7 +189,13 @@ pub fn est_omega(q1: &[f64], q2: &[f64]) -> Result<f64> {
     Ok(w)
 }
 
-// Measure variability for each SNP
+/// Estimate per-site variance given omega and population-2 frequency.
+///
+/// # Examples
+///
+/// ```ignore
+/// let v = xpclrs::methods::var_estimate(0.5, 0.2).unwrap();
+/// ```
 pub fn var_estimate(w: f64, q2: f64) -> Result<f64> {
     // log::debug!(
     //     "var_estimate {w} {q2} {} {} {}",
@@ -134,8 +212,14 @@ fn round_to(x: f64, digits: u32) -> f64 {
     (x * factor).round() / factor
 }
 
-// c is a proxy for selection strength.
-// c is [0,1] the closer to 1, the weaker the influence of selection.
+/// Compute the selection proxy `c` from recombination, selection, and effective population size.
+/// c is in the range [0,1]; the closer to 1, the weaker the influence of selection.
+///
+/// # Examples
+///
+/// ```ignore
+/// let c = xpclrs::methods::compute_c(1e-8, 0.01, None, None, None).unwrap();
+/// ```
 pub fn compute_c(
     r: f64,
     s: f64,
@@ -293,15 +377,11 @@ fn _compute_chen_likelihood(
 }
 
 // Compute composite likelihood
-#[allow(clippy::too_many_arguments)]
 fn compute_complikelihood(
     sc: f64,
     xs: &[u64],
     ns: &[u64],
-    rds: &[f64],
-    p2freqs: &[f64],
-    weights: &[f64],
-    omegas: &[f64],
+    (rds, p2freqs, weights, omegas): (&[f64], &[f64], &[f64], &[f64]),
     fast: Option<bool>,
 ) -> Result<f64> {
     if !(0.0..1.0).contains(&sc) {
@@ -323,7 +403,6 @@ fn compute_complikelihood(
             .collect::<Vec<f64>>();
         // final value
         let ml: f64 = marginall.iter().sum();
-        // println!("compute_complikelihood sc={sc} marginall={marginall:?} ml={ml}");
         Ok(-ml)
     }
 }
@@ -349,7 +428,7 @@ fn compute_xpclr(
     // Define selection coefficient
     for (counter, sc) in sel_coeffs.iter().enumerate() {
         // Compute ll
-        let ll = compute_complikelihood(*sc, xs, ns, rds, p2freqs, weights, omegas, fast)
+        let ll = compute_complikelihood(*sc, xs, ns, (rds, p2freqs, weights, omegas), fast)
             .expect("Cannot infer composite likelihood");
         if counter == 0 {
             null_model_li = ll;
@@ -577,6 +656,14 @@ pub struct XPCLRResult {
 }
 
 // Main XP-CLR caller
+/// Compute XP-CLR scores for the provided windows.
+///
+/// # Examples
+///
+/// ```ignore
+/// // See README for constructing GenoData and window definitions.
+/// let results = xpclrs::methods::xpclr(g_data, windows, None, 200, 10, None, None).unwrap();
+/// ```
 pub fn xpclr(
     g_data: GenoData,
     windows: Vec<(usize, usize)>, // Windows
