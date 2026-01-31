@@ -131,6 +131,7 @@ pub fn read_plink_files(
     let bim_reader = BufReader::new(bim_file);
     let mut n_snps: usize = 0;
     let mut positions: Vec<usize> = vec![];
+    let mut gd_data: Vec<f64> = vec![];
     let mut keep_vec: Vec<bool> = vec![];
     for line in bim_reader.lines() {
         let line = line?;
@@ -139,6 +140,13 @@ pub fn read_plink_files(
             let pos: u64 = fields[3].parse().unwrap();
             if pos >= start && (end.is_none() || pos <= end.unwrap()) {
                 positions.push(fields[3].parse::<usize>().unwrap());
+                // Add genetic distance in the bim file, if provided, otherwise compute it
+                // based on the recombination rate and physical position
+                let gd = match fields[2].parse::<f64>() {
+                    Ok(v) => v,
+                    Err(_) => pos as f64 * rrate.unwrap_or(1e-8),
+                };
+                gd_data.push(gd);
                 keep_vec.push(true);
                 n_snps += 1;
             } else {
@@ -185,10 +193,8 @@ pub fn read_plink_files(
     let mut skipped = 0;
     let mut tot = 0;
     let (gt1_data, gt2_data, positions, gd_data): (Vec<_>, Vec<_>, Vec<_>, Vec<_>) =
-        izip!(genotypes.iter(), positions.iter())
-            .filter_map(|(snp, position)| {
-                // Compute genetic distance if requested
-                let gd = *position as f64 * rrate.unwrap_or(1e-8);
+        izip!(genotypes.iter(), positions.iter(), gd_data.iter())
+            .filter_map(|(snp, position, gd )| {
                 // Prepare GT1 and GT2
                 // Usually, 00, 10 and 11 mean 2, 1 and 0 minor allele counts respectively
                 let gt1 = i1
