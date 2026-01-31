@@ -1,5 +1,9 @@
-# Use the official NVIDIA CUDA image as the base image
-FROM ubuntu:18.04
+# Use an old ubuntu image to maximize compatibility with older systems relying on
+# older libc versions
+FROM ubuntu:18.04 AS build
+
+# Copy source code
+COPY . /xpclrs
 
 # Set up the environment
 ENV DEBIAN_FRONTEND=noninteractive
@@ -17,3 +21,10 @@ RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
 
 # Add Cargo to PATH
 ENV PATH="/root/.cargo/bin:${PATH}"
+
+# Compile the tool, then declutter the image
+WORKDIR /xpclrs
+RUN /root/.cargo/bin/cargo build --release
+
+FROM ubuntu:18.04 AS runtime
+COPY --from=build /xpclrs/target/release/xpclrs /usr/local/bin/xpclrs
