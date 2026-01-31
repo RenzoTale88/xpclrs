@@ -1,0 +1,56 @@
+name: Docker
+# This builds the docker image and pushes it to DockerHub
+# Runs on nf-core repo releases and push event to 'dev' branch (PR merges)
+on:
+  push:
+    branches:
+      - main
+  release:
+    types: [published]
+
+jobs:
+  push_dockerhub:
+    name: Push new Docker image to Docker Hub
+    runs-on: ubuntu-latest
+    # Only run for the nf-core repo, for releases and merged PRs
+    if: ${{ github.repository == 'RenzoTale88/xpclrs' }}
+    env:
+      DOCKERHUB_USERNAME: ${{ secrets.DOCKER_HUB_USERNAME }}
+      DOCKERHUB_PASS: ${{ secrets.DOCKER_HUB_ACCESS_TOKEN }}
+    steps:
+      - name: Check out pipeline code
+        uses: actions/checkout@v4
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKER_HUB_USERNAME }}
+          password: ${{ secrets.DOCKER_HUB_ACCESS_TOKEN }}
+
+      - name: Build and push Docker image (push event)
+        if: ${{ github.event_name == 'push' }}
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ secrets.DOCKER_HUB_USERNAME }}/xpclrs:latest
+          no-cache: true
+
+      - name: Build and push Docker image (release event)
+        if: ${{ github.event_name == 'release' }}
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: |
+            ${{ secrets.DOCKER_HUB_USERNAME }}/xpclrs:latest
+            ${{ secrets.DOCKER_HUB_USERNAME }}/xpclrs:${{ github.event.release.tag_name }}
+          no-cache: true
