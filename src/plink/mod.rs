@@ -31,12 +31,12 @@ fn bed_snp_major(bed_file: &mut File, n_snps: usize, n_samples: usize) -> Vec<Ve
         bed_file
             .read_exact(&mut snp_bytes)
             .expect("Cannot read bytes");
-        for sample_idx in 0..n_samples {
+        for (sample_idx, slot) in snp_row.iter_mut().enumerate() {
             let byte_index = sample_idx / 4; // Which byte (0, 1, 2, ...)
             let shift = 2 * (sample_idx % 4); // Shift to get the right pair
             let bits = (snp_bytes[byte_index] >> shift) & 0b11;
 
-            snp_row[sample_idx] = bits;
+            *slot = bits;
         }
     }
     log::info!("Genotypes loaded.");
@@ -53,17 +53,17 @@ fn bed_ind_major(bed_file: &mut File, n_snps: usize, n_samples: usize) -> Vec<Ve
     let mut ind_bytes = vec![0u8; bytes_per_ind];
 
     // Load individual genotypes
-    for sample_idx in 0..n_samples {
+    for bit_row in gts.iter_mut().take(n_samples) {
         bed_file
             .read_exact(&mut ind_bytes)
             .expect("Cannot read bytes");
 
-        for snp_idx in 0..n_snps {
+        for (snp_idx, slot) in bit_row.iter_mut().enumerate() {
             let byte_index = snp_idx / 4; // Which byte (0, 1, 2, ...)
             let shift = 2 * (snp_idx % 4); // Shift to get the right pair
             let bits = (ind_bytes[byte_index] >> shift) & 0b11;
 
-            gts[snp_idx][sample_idx] = bits;
+            *slot = bits;
         }
     }
     log::info!("Genotypes loaded.");
@@ -170,7 +170,7 @@ pub fn read_plink_files(
         bed_ind_major(&mut bed_file, n_snps, n_samples)
     }
         .into_iter()
-        .zip(keep_vec.into_iter())
+        .zip(keep_vec)
         .filter_map(|(gt_row, keep)| if keep { Some(gt_row) } else { None })
         .collect();
 
@@ -181,7 +181,7 @@ pub fn read_plink_files(
     let mut pass = 0;
     let mut skipped = 0;
     let mut tot = 0;
-    let (gt1_data, gt2_data, positions, gd_data): (Vec<Vec<i8>>, Vec<Vec<i8>>, Vec<usize>, Vec<f64>) = izip!(
+    let (gt1_data, gt2_data, positions, gd_data): (Vec<_>, Vec<_>, Vec<_>, Vec<_>) = izip!(
             genotypes.iter(),
             positions.iter()
         ).filter_map(|(snp, position)| {
