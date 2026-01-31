@@ -143,7 +143,7 @@ pub fn read_plink_files(
                 // Add genetic distance in the bim file, if provided, otherwise compute it
                 // based on the recombination rate and physical position
                 let gd = match fields[2].parse::<f64>() {
-                    Ok(v) => v,
+                    Ok(v) => if v != 0.0 { v } else { pos as f64 * rrate.unwrap_or(1e-8) },
                     Err(_) => pos as f64 * rrate.unwrap_or(1e-8),
                 };
                 gd_data.push(gd);
