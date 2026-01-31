@@ -123,8 +123,24 @@ pub fn process_xcf(
     let csi_path = format!("{xcf_fn}.csi");
     let has_index = Path::exists(Path::new(&tbi_path)) || Path::exists(Path::new(&csi_path));
     let g_data = match has_index {
-        true => indexed_xcf(xcf_fn, s1, s2, chrom, start, end, (phased, rrate, gdistkey, n_threads)),
-        false => readthrough_xcf(xcf_fn, s1, s2, chrom, start, end, (phased, rrate, gdistkey, n_threads)),
+        true => indexed_xcf(
+            xcf_fn,
+            s1,
+            s2,
+            chrom,
+            start,
+            end,
+            (phased, rrate, gdistkey, n_threads),
+        ),
+        false => readthrough_xcf(
+            xcf_fn,
+            s1,
+            s2,
+            chrom,
+            start,
+            end,
+            (phased, rrate, gdistkey, n_threads),
+        ),
     }
     .expect("Failed to parse the VCF/BCF file");
     Ok(g_data)
@@ -143,7 +159,8 @@ pub fn process_plink(
     // Process the data depending on the presence of the index
     let start = start.unwrap_or(0);
     // Prepare the input VCF
-    let g_data = read_plink_files(&plink_root, s1, s2, chrom, start, end, (phased, rrate)).expect("Failed to parse the BED/BIM/FAM file");
+    let g_data = read_plink_files(&plink_root, s1, s2, chrom, start, end, (phased, rrate))
+        .expect("Failed to parse the BED/BIM/FAM file");
     Ok(g_data)
 }
 

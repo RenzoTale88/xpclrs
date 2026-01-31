@@ -1,12 +1,11 @@
 /*
 This module provides the binary plink-specific I/O functions.
 */
-use crate::io::{consolidate_list, GenoData, get_gt_index};
+use crate::io::{consolidate_list, get_gt_index, GenoData};
 use itertools::izip;
 use itertools::MultiUnzip;
 use std::fs::File;
 use std::io::{self, BufRead, BufReader, Read};
-
 
 pub struct PlinkData {
     pub genotypes: Vec<Vec<u8>>, // Matrix of genotypes (0,1,2)
@@ -99,10 +98,7 @@ pub fn read_plink_files(
             }
         })
         .collect();
-    let sample_ids: Vec<&[u8]> = sample_ids_owned
-        .iter()
-        .map(|id| id.as_slice())
-        .collect();
+    let sample_ids: Vec<&[u8]> = sample_ids_owned.iter().map(|id| id.as_slice()).collect();
     // Number of samples for later use.
     let n_samples = sample_ids.len();
     // Load sample lists as an u8 array
@@ -110,8 +106,8 @@ pub fn read_plink_files(
     let s2 = consolidate_list(&sample_ids, s2).expect("Failed to subset sampleB");
     // Fetch the indices of each sample in each list
     let i1 = get_gt_index(&sample_ids, &s1).expect("Failed to get indeces of sampleA");
-    let i2 = get_gt_index(&sample_ids, &s2).expect("Failed to get indeces of sampleB");    
-    
+    let i2 = get_gt_index(&sample_ids, &s2).expect("Failed to get indeces of sampleB");
+
     // Print number of samples
     log::info!("Samples A: {}", i1.len());
     log::info!("Samples B: {}", i2.len());
@@ -169,10 +165,10 @@ pub fn read_plink_files(
         log::info!("Reading in Individual-major mode.");
         bed_ind_major(&mut bed_file, n_snps, n_samples)
     }
-        .into_iter()
-        .zip(keep_vec)
-        .filter_map(|(gt_row, keep)| if keep { Some(gt_row) } else { None })
-        .collect();
+    .into_iter()
+    .zip(keep_vec)
+    .filter_map(|(gt_row, keep)| if keep { Some(gt_row) } else { None })
+    .collect();
 
     // Filter the dataset
     let mut monom_gt2 = 0;
@@ -181,54 +177,52 @@ pub fn read_plink_files(
     let mut pass = 0;
     let mut skipped = 0;
     let mut tot = 0;
-    let (gt1_data, gt2_data, positions, gd_data): (Vec<_>, Vec<_>, Vec<_>, Vec<_>) = izip!(
-            genotypes.iter(),
-            positions.iter()
-        ).filter_map(|(snp, position)| {
-            // Compute genetic distance if requested
-            let gd = *position as f64 * rrate.unwrap_or(1e-8);
-            // Prepare GT1 and GT2
-            let gt1 = i1
-                .iter()
-                .map(|&i| match snp[i] {
+    let (gt1_data, gt2_data, positions, gd_data): (Vec<_>, Vec<_>, Vec<_>, Vec<_>) =
+        izip!(genotypes.iter(), positions.iter())
+            .filter_map(|(snp, position)| {
+                // Compute genetic distance if requested
+                let gd = *position as f64 * rrate.unwrap_or(1e-8);
+                // Prepare GT1 and GT2
+                let gt1 = i1
+                    .iter()
+                    .map(|&i| match snp[i] {
                         0b00 => 0_i8,
                         0b10 => 1_i8,
                         0b11 => 2_i8,
                         _ => -9_i8,
-                    }
-                )
-                .collect::<Vec<i8>>();
-            let gt2 = i2
-                .iter()
-                .map(|&i| match snp[i] {
+                    })
+                    .collect::<Vec<i8>>();
+                let gt2 = i2
+                    .iter()
+                    .map(|&i| match snp[i] {
                         0b00 => 0_i8,
                         0b10 => 1_i8,
                         0b11 => 2_i8,
                         _ => -9_i8,
-                    }
-                )
-                .collect::<Vec<i8>>();
-            let all_missing_g1 = gt1.iter().all(|i| *i == -9_i8);
-            let all_missing_g2 = gt2.iter().all(|i| *i == -9_i8);
-            if all_missing_g1 || all_missing_g2 {
-                skipped += 1;
-                tot += 1;
-                miss_gt1 += if all_missing_g1 { 1 } else { 0 };
-                miss_gt2 += if all_missing_g2 { 1 } else { 0 };
-                None
-            } else if gt2.iter().filter(|&&i| i != -9_i8).all(|i| *i == 0_i8) || gt2.iter().filter(|&&i| i != -9_i8).all(|i| *i == 2_i8) {
-                skipped += 1;
-                tot += 1;
-                monom_gt2 += 1;
-                None
-            } else {
-                pass += 1;
-                tot += 1;
-                Some((gt1, gt2, *position, gd))
-            }
-            
-        })
-        .multiunzip();    
+                    })
+                    .collect::<Vec<i8>>();
+                let all_missing_g1 = gt1.iter().all(|i| *i == -9_i8);
+                let all_missing_g2 = gt2.iter().all(|i| *i == -9_i8);
+                if all_missing_g1 || all_missing_g2 {
+                    skipped += 1;
+                    tot += 1;
+                    miss_gt1 += if all_missing_g1 { 1 } else { 0 };
+                    miss_gt2 += if all_missing_g2 { 1 } else { 0 };
+                    None
+                } else if gt2.iter().filter(|&&i| i != -9_i8).all(|i| *i == 0_i8)
+                    || gt2.iter().filter(|&&i| i != -9_i8).all(|i| *i == 2_i8)
+                {
+                    skipped += 1;
+                    tot += 1;
+                    monom_gt2 += 1;
+                    None
+                } else {
+                    pass += 1;
+                    tot += 1;
+                    Some((gt1, gt2, *position, gd))
+                }
+            })
+            .multiunzip();
 
     // Assess everything looks good
     if gt1_data.len() != gt2_data.len() {

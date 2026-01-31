@@ -221,13 +221,13 @@ fn _integrate_qags_gk_scirs2<F>(
     epsabs: f64,
     epsrel: f64,
     limit: usize,
-    fast: Option<bool>
+    fast: Option<bool>,
 ) -> (f64, f64)
 where
     F: Fn(f64) -> f64,
 {
     let (value, abs_error) = if fast == Some(true) {
-    // QAGS: adaptive Gauss–Kronrod with singularity handling
+        // QAGS: adaptive Gauss–Kronrod with singularity handling
         let (value, abs_error, _est) = gauss_kronrod21(|x: f64| f(x), a, b);
         (value, abs_error)
     } else {
@@ -246,7 +246,14 @@ where
     (value, abs_error)
 }
 
-fn _compute_chen_likelihood(xj: u64, nj: u64, c: f64, p2: f64, var: f64, fast: Option<bool>) -> Result<f64> {
+fn _compute_chen_likelihood(
+    xj: u64,
+    nj: u64,
+    c: f64,
+    p2: f64,
+    var: f64,
+    fast: Option<bool>,
+) -> Result<f64> {
     // Integral bounds and tolerances matching SciPy quad
     let a = 0.001;
     let b = 0.999;
@@ -263,12 +270,19 @@ fn _compute_chen_likelihood(xj: u64, nj: u64, c: f64, p2: f64, var: f64, fast: O
         epsabs,
         epsrel,
         limit,
-        fast
-        );
+        fast,
+    );
 
     // Base integral of the pdf (denominator)
-    let (like_b, _err_b) =
-        _integrate_qags_gk_scirs2(|p1| pdf_scalar(p1, c, p2, var), a, b, epsabs, epsrel, limit, fast);
+    let (like_b, _err_b) = _integrate_qags_gk_scirs2(
+        |p1| pdf_scalar(p1, c, p2, var),
+        a,
+        b,
+        epsabs,
+        epsrel,
+        limit,
+        fast,
+    );
     // Return the right value
     let ratio = if like_i > 0.0 && like_b > 0.0 {
         like_i.ln() - like_b.ln()
@@ -700,12 +714,10 @@ mod tests {
 
     #[test]
     fn compute_c_bounds_and_rounding() {
-        let c0 = compute_c(0.01, 0.0, Some(20000), Some(1e-7), Some(5))
-            .expect("compute_c");
+        let c0 = compute_c(0.01, 0.0, Some(20000), Some(1e-7), Some(5)).expect("compute_c");
         assert!(approx_eq(c0, 1.0_f64, 1e-12));
 
-        let c = compute_c(0.01, 0.1, Some(20000), Some(1e-7), Some(5))
-            .expect("compute_c");
+        let c = compute_c(0.01, 0.1, Some(20000), Some(1e-7), Some(5)).expect("compute_c");
         assert!((0.0_f64..=1.0_f64).contains(&c));
         let x = -((2.0_f64 * 20000.0_f64).ln()) * (0.01_f64.max(1e-7)) / 0.1;
         let expected = round_to(1.0 - x.exp(), 5);

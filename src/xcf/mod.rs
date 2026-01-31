@@ -1,7 +1,7 @@
 /*
 This module provides the VCF/BCF-specific I/O functions.
 */
-use crate::io::{consolidate_list, GenoData, get_gt_index, gt2gcount};
+use crate::io::{consolidate_list, get_gt_index, gt2gcount, GenoData};
 use anyhow::Result;
 use counter::Counter;
 use itertools::MultiUnzip;
@@ -9,11 +9,7 @@ use rust_htslib::bcf::{
     record::{Genotype, GenotypeAllele},
     IndexedReader, Read, Reader,
 };
-use std::{
-    fmt::Display,
-    path::Path,
-};
-
+use std::{fmt::Display, path::Path};
 
 // Data structure
 // Define multiple readers for the indexed and unindexed XCF file
@@ -47,7 +43,9 @@ pub fn indexed_xcf(
     log::info!("Indexed reader.");
     // Prepare the indexed reader
     let mut reader = IndexedReader::from_path(xcf_fn).expect("Cannot load indexed BCF/VCF file");
-    reader.set_threads(n_threads).expect("Failed to set threads");
+    reader
+        .set_threads(n_threads)
+        .expect("Failed to set threads");
     let rrate = rrate.unwrap_or(1e-8);
     // Resolve options once to avoid per-record branching.
     let phased = phased.unwrap_or(false);
@@ -108,11 +106,11 @@ pub fn indexed_xcf(
                     .iter()
                     .map(|i| genotypes.get(*i))
                     .collect::<Vec<Genotype>>();
-                
+
                 // Count alleles from both populations in a single pass
                 let mut alleles1: Counter<u32> = Counter::new();
                 let mut alleles2: Counter<u32> = Counter::new();
-                
+
                 for g in &gt1_g {
                     for a in g.iter().filter_map(|a| a.index()) {
                         alleles1[&a] += 1;
@@ -125,7 +123,8 @@ pub fn indexed_xcf(
                 }
 
                 // Union both sets
-                let all_alleles: Counter<u32> = alleles1.iter()
+                let all_alleles: Counter<u32> = alleles1
+                    .iter()
                     .chain(alleles2.iter())
                     .map(|(&k, &v)| (k, v))
                     .collect();
@@ -202,11 +201,11 @@ pub fn indexed_xcf(
                     .iter()
                     .map(|i| genotypes.get(*i))
                     .collect::<Vec<Genotype>>();
-                
+
                 // Count alleles from both populations in a single pass
                 let mut alleles1: Counter<u32> = Counter::new();
                 let mut alleles2: Counter<u32> = Counter::new();
-                
+
                 for g in &gt1_g {
                     for a in g.iter().filter_map(|a| a.index()) {
                         alleles1[&a] += 1;
@@ -219,7 +218,8 @@ pub fn indexed_xcf(
                 }
 
                 // Union both sets
-                let all_alleles: Counter<u32> = alleles1.iter()
+                let all_alleles: Counter<u32> = alleles1
+                    .iter()
                     .chain(alleles2.iter())
                     .map(|(&k, &v)| (k, v))
                     .collect();
@@ -321,7 +321,9 @@ pub fn readthrough_xcf(
     log::info!("Consider generating an index for your BCF/VCF file.");
     // Prepare the indexed reader
     let mut reader = Reader::from_path(xcf_fn).expect("Cannot load indexed BCF/VCF file");
-    reader.set_threads(n_threads).expect("Failed to set threads");
+    reader
+        .set_threads(n_threads)
+        .expect("Failed to set threads");
     let end = end.unwrap_or(999999999);
     let rrate = rrate.unwrap_or(1e-8);
     // Resolve options once to avoid per-record branching.
@@ -389,7 +391,7 @@ pub fn readthrough_xcf(
                 // Count alleles from both populations in a single pass
                 let mut alleles1: Counter<u32> = Counter::new();
                 let mut alleles2: Counter<u32> = Counter::new();
-                
+
                 for g in &gt1_g {
                     for a in g.iter().filter_map(|a| a.index()) {
                         alleles1[&a] += 1;
@@ -402,7 +404,8 @@ pub fn readthrough_xcf(
                 }
 
                 // Union both sets
-                let all_alleles: Counter<u32> = alleles1.iter()
+                let all_alleles: Counter<u32> = alleles1
+                    .iter()
                     .chain(alleles2.iter())
                     .map(|(&k, &v)| (k, v))
                     .collect();
@@ -488,7 +491,7 @@ pub fn readthrough_xcf(
                 // Count alleles from both populations in a single pass
                 let mut alleles1: Counter<u32> = Counter::new();
                 let mut alleles2: Counter<u32> = Counter::new();
-                
+
                 for g in &gt1_g {
                     for a in g.iter().filter_map(|a| a.index()) {
                         alleles1[&a] += 1;
@@ -501,7 +504,8 @@ pub fn readthrough_xcf(
                 }
 
                 // Union both sets
-                let all_alleles: Counter<u32> = alleles1.iter()
+                let all_alleles: Counter<u32> = alleles1
+                    .iter()
                     .chain(alleles2.iter())
                     .map(|(&k, &v)| (k, v))
                     .collect();
@@ -588,4 +592,3 @@ pub fn readthrough_xcf(
         gdistances: gd_data,
     })
 }
-
