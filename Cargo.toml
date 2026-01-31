@@ -8,6 +8,7 @@ repository = "https://github.com/RenzoTale88/xpclrs"
 readme = "README.md"
 keywords = ["genome", "bioinformatics", "sequencing"]
 categories = ["bioinformatics"]
+description = "A high-performance rust implementation of the XP-CLR method."
 
 [dependencies]
 anyhow           = "1.0.98"
