@@ -39,6 +39,7 @@ fn bed_snp_major(bed_file: &mut File, n_snps: usize, n_samples: usize) -> Vec<Ve
         }
     }
     log::info!("Genotypes loaded.");
+    log::info!("Matrix shape: {} x {}.", gts.len(), gts[0].len());
     gts
 }
 
@@ -51,8 +52,8 @@ fn bed_ind_major(bed_file: &mut File, n_snps: usize, n_samples: usize) -> Vec<Ve
     let bytes_per_ind = n_snps.div_ceil(4);
     let mut ind_bytes = vec![0u8; bytes_per_ind];
 
-    // Load individual genotypes
-    for bit_row in gts.iter_mut().take(n_samples) {
+    // Load n_snps at the same time, representing one individual
+    for bit_row in gts.iter_mut().take(n_snps) {
         bed_file
             .read_exact(&mut ind_bytes)
             .expect("Cannot read bytes");
@@ -66,6 +67,7 @@ fn bed_ind_major(bed_file: &mut File, n_snps: usize, n_samples: usize) -> Vec<Ve
         }
     }
     log::info!("Genotypes loaded.");
+    log::info!("Matrix shape: {} x {}.", gts.len(), gts[0].len());
     gts
 }
 
@@ -134,6 +136,7 @@ pub fn read_plink_files(
     let mut gd_data: Vec<f64> = vec![];
     let mut keep_vec: Vec<bool> = vec![];
     for line in bim_reader.lines() {
+        n_snps += 1;
         let line = line?;
         let fields: Vec<&str> = line.split_whitespace().collect();
         if chrom == fields[0] {
@@ -148,7 +151,6 @@ pub fn read_plink_files(
                 };
                 gd_data.push(gd);
                 keep_vec.push(true);
-                n_snps += 1;
             } else {
                 keep_vec.push(false);
             }
