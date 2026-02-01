@@ -307,7 +307,7 @@ pub fn indexed_xcf(
     log::info!("Loaded {pass} variants");
     log::info!("Skipped {skipped} variants because:");
     log::info!(" - {multiallelic} multiallelic");
-    log::info!(" - {monom_gt2} monomorphic in pop B");
+    log::info!(" - {monom_gt2} monomorphic/singleton in pop B");
     log::info!(" - {miss_gt1} all-missing in pop A");
     log::info!(" - {miss_gt2} all-missing in pop B");
     Ok(GenoData {
@@ -600,7 +600,7 @@ pub fn readthrough_xcf(
     log::info!("Loaded {pass} variants");
     log::info!("Skipped {skipped} variants because:");
     log::info!(" - {multiallelic} multiallelic");
-    log::info!(" - {monom_gt2} monomorphic in pop B");
+    log::info!(" - {monom_gt2} monomorphic/singleton in pop B");
     log::info!(" - {miss_gt1} all-missing in pop A");
     log::info!(" - {miss_gt2} all-missing in pop B");
     Ok(GenoData {

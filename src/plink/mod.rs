@@ -146,7 +146,13 @@ pub fn read_plink_files(
                 // Add genetic distance in the bim file, if provided, otherwise compute it
                 // based on the recombination rate and physical position
                 let gd = match fields[2].parse::<f64>() {
-                    Ok(v) => if v != 0.0 { v } else { pos as f64 * rrate.unwrap_or(1e-8) },
+                    Ok(v) => {
+                        if v != 0.0 {
+                            v
+                        } else {
+                            pos as f64 * rrate.unwrap_or(1e-8)
+                        }
+                    }
                     Err(_) => pos as f64 * rrate.unwrap_or(1e-8),
                 };
                 gd_data.push(gd);
@@ -196,7 +202,7 @@ pub fn read_plink_files(
     let mut tot = 0;
     let (gt1_data, gt2_data, positions, gd_data): (Vec<_>, Vec<_>, Vec<_>, Vec<_>) =
         izip!(genotypes.iter(), positions.iter(), gd_data.iter())
-            .filter_map(|(snp, position, gd )| {
+            .filter_map(|(snp, position, gd)| {
                 // Prepare GT1 and GT2
                 // Usually, 00, 10 and 11 mean 2, 1 and 0 minor allele counts respectively
                 let gt1 = i1
@@ -219,15 +225,21 @@ pub fn read_plink_files(
                     .collect::<Vec<i8>>();
                 let all_missing_g1 = gt1.iter().all(|i| *i == -9_i8);
                 let all_missing_g2 = gt2.iter().all(|i| *i == -9_i8);
+                let non_missing = gt2
+                    .iter()
+                    .filter_map(|&i| if i != -9_i8 { Some(i as i64) } else { None })
+                    .collect::<Vec<i64>>();
+                let n_minor_alleles: i64 = non_missing.iter().sum();
+                let monom_or_singleton_gt2 = n_minor_alleles <= 1
+                    || non_missing.iter().all(|i| *i == 0_i64)
+                    || non_missing.iter().all(|i| *i == 2_i64);
                 if all_missing_g1 || all_missing_g2 {
                     skipped += 1;
                     tot += 1;
                     miss_gt1 += if all_missing_g1 { 1 } else { 0 };
                     miss_gt2 += if all_missing_g2 { 1 } else { 0 };
                     None
-                } else if gt2.iter().filter(|&&i| i != -9_i8).all(|i| *i == 0_i8)
-                    || gt2.iter().filter(|&&i| i != -9_i8).all(|i| *i == 2_i8)
-                {
+                } else if monom_or_singleton_gt2 {
                     skipped += 1;
                     tot += 1;
                     monom_gt2 += 1;
@@ -259,7 +271,7 @@ pub fn read_plink_files(
     log::info!("Loaded {pass} variants");
     log::info!("Skipped {skipped} variants because:");
     log::info!(" - 0 multiallelic");
-    log::info!(" - {monom_gt2} monomorphic in pop B");
+    log::info!(" - {monom_gt2} monomorphic/singleton in pop B");
     log::info!(" - {miss_gt1} all-missing in pop A");
     log::info!(" - {miss_gt2} all-missing in pop B");
 
