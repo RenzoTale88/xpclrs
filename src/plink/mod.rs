@@ -233,7 +233,7 @@ pub fn read_plink_files(
                 } else {
                     pass += 1;
                     tot += 1;
-                    Some((gt1, gt2, *position, gd))
+                    Some((gt1, gt2, *position, *gd))
                 }
             })
             .multiunzip();

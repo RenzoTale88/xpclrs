@@ -338,7 +338,7 @@ pub fn readthrough_xcf(
     log::info!("This is substantially slower than the indexed one.");
     log::info!("Consider generating an index for your BCF/VCF file.");
     // Prepare the indexed reader
-    let mut reader = Reader::from_path(xcf_fn).expect("Cannot load indexed BCF/VCF file");
+    let mut reader = Reader::from_path(xcf_fn).expect("Cannot load unindexed/streamed BCF/VCF file");
     reader
         .set_threads(n_threads)
         .expect("Failed to set threads");
