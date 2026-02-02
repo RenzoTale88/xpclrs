@@ -1,17 +1,13 @@
 /*
-This module provides the I/O functions (e.g. VCF/BCF readers, text readers etc).
+This module provides the shared I/O functions (e.g. VCF/BCF readers, text readers etc).
 */
 use crate::methods::XPCLRResult;
+use crate::plink::read_plink_files;
+use crate::xcf::{indexed_xcf, readthrough_xcf};
 use anyhow::Result;
-use counter::Counter;
 use flate2::write;
 use flate2::Compression;
-use itertools::MultiUnzip;
-use rust_htslib::bcf::{
-    self,
-    record::{Genotype, GenotypeAllele},
-    IndexedReader, Read, Reader,
-};
+use rust_htslib::bcf::record::Genotype;
 use statistical::{mean, population_standard_deviation};
 use std::{
     collections::HashSet,
@@ -21,12 +17,6 @@ use std::{
     io::{BufRead, BufReader, BufWriter, Write},
     path::Path,
 };
-
-// Define multople readers for the indexed and unindexed XCF file
-pub enum XcfReader {
-    Indexed(bcf::IndexedReader),
-    Readthrough(bcf::Reader),
-}
 
 // Genotype data structure
 pub struct GenoData {
@@ -38,45 +28,41 @@ pub struct GenoData {
     pub gdistances: Vec<f64>,
 }
 
-// Genotypes to counts
-fn gt2gcount(gt: Genotype, ref_ix: u32) -> i8 {
-    // Extract allele indices, ignoring missing
-    let alleles: Vec<u32> = gt
-        .iter()
-        .filter_map(|a| a.index()) // skip missing
-        .collect();
-
-    if alleles.is_empty() {
-        // All missing
-        -9_i8
-    } else {
-        // Count how many are NOT the ref allele
-        let alt_count = alleles.iter().filter(|&&ix| ix != ref_ix).count() as i8;
-
-        if alt_count == 0 {
-            0
-        } else {
-            alt_count
+/// Convert a genotype into an alternate-allele count relative to `ref_ix`.
+///
+/// # Examples
+///
+/// ```ignore
+/// let count = xpclrs::io::gt2gcount(genotype, 0);
+/// ```
+pub fn gt2gcount(gt: Genotype, ref_ix: u32) -> i8 {
+    // Single-pass count without allocating a temporary allele vector.
+    let mut seen = false;
+    let mut alt_count: i8 = 0;
+    for allele in gt.iter().filter_map(|a| a.index()) {
+        seen = true;
+        if allele != ref_ix {
+            alt_count += 1;
         }
+    }
+
+    if !seen {
+        -9_i8
+    } else if alt_count == 0 {
+        0
+    } else {
+        alt_count
     }
 }
 
-// Convert genotypes in the appropriate form
-// (Phased haplotype conversion not used with compact storage)
-
-/// Same as smakcr, but single threaded for now
-pub fn read_xcf<P: AsRef<Path> + Display>(path: P, has_index: bool) -> Result<XcfReader> {
-    let xcf_reader: XcfReader = if has_index {
-        XcfReader::Indexed(
-            bcf::IndexedReader::from_path(path).expect("Cannot load indexed BCF/VCF file"),
-        )
-    } else {
-        XcfReader::Readthrough(bcf::Reader::from_path(path).expect("Cannot load BCF/VCF file"))
-    };
-    Ok(xcf_reader)
-}
-
-/// Same as smakcr, but single threaded for now
+/// Read file contents, either compressed or uncompressed.
+///
+/// # Examples
+///
+/// ```ignore
+/// let records = xpclrs::io::read_file("data.txt")?;
+/// for line in records { println!("{}", line?); }
+/// ```
 pub fn read_file<P: AsRef<Path> + Display>(
     path: P,
 ) -> Result<impl Iterator<Item = Result<String>>> {
@@ -106,8 +92,16 @@ pub fn read_file<P: AsRef<Path> + Display>(
     Ok(records)
 }
 
-// Consolidate the list
-fn consolidate_list(full_list: &Vec<&[u8]>, subset: &[String]) -> Result<Vec<String>> {
+/// Keep only sample IDs present in `full_list`.
+///
+/// # Examples
+///
+/// ```ignore
+/// let full: Vec<&[u8]> = vec![b"s1", b"s2"];
+/// let subset = vec!["s2".to_string()];
+/// let out = xpclrs::io::consolidate_list(&full, &subset).unwrap();
+/// ```
+pub fn consolidate_list(full_list: &Vec<&[u8]>, subset: &[String]) -> Result<Vec<String>> {
     let filtered = subset
         .iter()
         .filter(|&s| full_list.contains(&s.as_bytes()))
@@ -116,8 +110,16 @@ fn consolidate_list(full_list: &Vec<&[u8]>, subset: &[String]) -> Result<Vec<Str
     Ok(filtered)
 }
 
-// Function to get the index of each sample in the lists
-fn get_gt_index(full_list: &Vec<&[u8]>, subset: &[String]) -> Result<Vec<usize>> {
+/// Return indices of `subset` elements within `full_list`.
+///
+/// # Examples
+///
+/// ```ignore
+/// let full: Vec<&[u8]> = vec![b"s1", b"s2", b"s3"];
+/// let subset = vec!["s3".to_string()];
+/// let idx = xpclrs::io::get_gt_index(&full, &subset).unwrap();
+/// ```
+pub fn get_gt_index(full_list: &Vec<&[u8]>, subset: &[String]) -> Result<Vec<usize>> {
     let subset_set: HashSet<_> = subset.iter().collect();
     let indices: Vec<usize> = full_list
         .iter()
@@ -133,372 +135,13 @@ fn get_gt_index(full_list: &Vec<&[u8]>, subset: &[String]) -> Result<Vec<usize>>
     Ok(indices)
 }
 
-// Process indexed XCF file
-fn indexed_xcf(
-    xcf_fn: String,
-    s1: &[String],
-    s2: &[String],
-    chrom: &str,
-    start: u64,
-    end: Option<u64>,
-    (phased, rrate, gdistkey): (Option<bool>, Option<f64>, Option<String>),
-) -> Result<GenoData> {
-    log::info!("Indexed reader.");
-    // Prepare the indexed reader
-    let mut reader = IndexedReader::from_path(xcf_fn).expect("Cannot load indexed BCF/VCF file");
-    let rrate = rrate.unwrap_or(1e-8);
-
-    // Load the XCF file
-    let xcf_header = reader.header().clone();
-    log::info!("Samples in VCF: {}", xcf_header.sample_count());
-
-    // Load sample lists as an u8 array
-    let s1 = consolidate_list(&xcf_header.samples(), s1).expect("Failed to subset sampleA");
-    let s2 = consolidate_list(&xcf_header.samples(), s2).expect("Failed to subset sampleB");
-
-    // Fetch the indices of each sample in each list
-    let i1 = get_gt_index(&xcf_header.samples(), &s1).expect("Failed to get indeces of sampleA");
-    let i2 = get_gt_index(&xcf_header.samples(), &s2).expect("Failed to get indeces of sampleB");
-
-    // Print number of samples
-    log::info!("Samples A: {}", i1.len());
-    log::info!("Samples B: {}", i2.len());
-
-    // Dies if no samples are retained
-    if s1.is_empty() || s2.is_empty() {
-        eprintln!("No samples found in the lists.");
-        std::process::exit(1);
-    }
-
-    // Start loading the genotypes here
-    // First, find the sequence index
-    let rid = reader
-        .header()
-        .name2rid(chrom.as_bytes())
-        .expect("RID not found");
-    log::info!("Chromosome {chrom} (ID: {rid})");
-
-    // Jump to target position in place
-    let _ = reader.fetch(rid, start, end);
-    // Load the records, defining the counters of how many sites we skip
-    let mut multiallelic = 0;
-    let mut monom_gt2 = 0;
-    let mut miss_gt1 = 0;
-    let mut miss_gt2 = 0;
-    let mut pass = 0;
-    let mut skipped = 0;
-    let mut tot = 0;
-    let (positions, gt1_data, gt2_data, gd_data): (Vec<_>, Vec<_>, Vec<_>, Vec<_>) = reader
-        .records()
-        .filter_map(|r| {
-            let record = r.ok()?;
-            tot += 1;
-            let genotypes = record.genotypes().expect("Cannot fetch the genotypes");
-            let gt1_g = i1
-                .iter()
-                .map(|i| genotypes.get(*i))
-                .collect::<Vec<Genotype>>();
-            let gt2_g = i2
-                .iter()
-                .map(|i| genotypes.get(*i))
-                .collect::<Vec<Genotype>>();
-            // Check that the site is biallelic
-            let alleles1: Counter<u32> = gt1_g
-                .iter()
-                .flat_map(|g| g.iter().filter_map(|&a: &GenotypeAllele| a.index()))
-                .collect::<Counter<u32>>();
-
-            let alleles2: Counter<u32> = gt2_g
-                .iter()
-                .flat_map(|g| g.iter().filter_map(|a| a.index()))
-                .collect::<Counter<u32>>();
-
-            // Define genetic position
-            let gd = match &gdistkey {
-                Some(key) => record
-                    .info(key.as_bytes())
-                    .float()
-                    .ok()
-                    .flatten()
-                    .expect("Missing info field for genetic position")[0]
-                    as f64,
-                None => record.pos() as f64 * rrate,
-            };
-
-            // Union both sets
-            let mut all_alleles: Counter<_> = alleles1.clone();
-            all_alleles.extend(&alleles2);
-
-            // Perform filtering and counting
-            if all_alleles.len() > 2 {
-                skipped += 1;
-                multiallelic += 1;
-                None
-            } else if alleles1.is_empty() || alleles2.is_empty() {
-                skipped += 1;
-                if alleles1.is_empty() {
-                    miss_gt1 += 1;
-                };
-                if alleles2.is_empty() {
-                    miss_gt2 += 1;
-                };
-                None
-            } else if alleles2.len() == 1 || alleles2.values().min().copied()? == 1 {
-                skipped += 1;
-                monom_gt2 += 1;
-                None
-            } else {
-                pass += 1;
-                // Define reference allele as the minimum allele index (consistent with methods)
-                let ref_ix = *all_alleles
-                    .keys()
-                    .min()
-                    .expect("Can't compute reference allele index");
-                // Encode genotypes to compact i8 counts relative to ref allele
-                let gt1 = gt1_g
-                    .into_iter()
-                    .map(|gt| gt2gcount(gt, ref_ix))
-                    .collect::<Vec<i8>>();
-                // If phased, store haplotypes in gt2; else store dosages
-                let gt2 = if phased.unwrap_or(false) {
-                    gt2_g
-                        .iter()
-                        .flat_map(|gt| {
-                            gt.iter().map(|a| match a {
-                                GenotypeAllele::PhasedMissing => -9_i8,
-                                GenotypeAllele::UnphasedMissing => -9_i8,
-                                _ => a.index().unwrap() as i8,
-                            })
-                        })
-                        .collect::<Vec<i8>>()
-                } else {
-                    gt2_g
-                        .into_iter()
-                        .map(|gt| gt2gcount(gt, ref_ix))
-                        .collect::<Vec<i8>>()
-                };
-                Some((record.pos() as usize, gt1, gt2, gd))
-            }
-        })
-        .multiunzip();
-
-    // Assess everything looks good
-    if gt1_data.len() != gt2_data.len() {
-        panic!("Inconsistent data")
-    };
-    if positions.len() != gt2_data.len() {
-        panic!("Inconsistent data")
-    };
-    if positions.len() as i32 != pass {
-        panic!("Inconsistent data")
-    };
-    if tot != (pass + skipped) {
-        panic!("Inconsistent counts")
-    }
-    // Print some info
-    log::info!("Processed {tot} variants");
-    log::info!("Loaded {pass} variants");
-    log::info!("Skipped {skipped} variants because:");
-    log::info!(" - {multiallelic} multiallelic");
-    log::info!(" - {monom_gt2} monomorphic in pop B");
-    log::info!(" - {miss_gt1} all-missing in pop A");
-    log::info!(" - {miss_gt2} all-missing in pop B");
-    Ok(GenoData {
-        positions,
-        gt1: gt1_data,
-        gt2: gt2_data,
-        gdistances: gd_data,
-    })
-}
-
-// Process unindexed XCF
-fn readthrough_xcf(
-    xcf_fn: String,
-    s1: &[String],
-    s2: &[String],
-    chrom: &str,
-    start: u64,
-    end: Option<u64>,
-    (phased, rrate, gdistkey): (Option<bool>, Option<f64>, Option<String>),
-) -> Result<GenoData> {
-    log::info!("Streamed reader.");
-    log::info!("This is substantially slower than the indexed one.");
-    log::info!("Consider generating an index for your BCF/VCF file.");
-    // Prepare the indexed reader
-    let mut reader = Reader::from_path(xcf_fn).expect("Cannot load indexed BCF/VCF file");
-    let end = end.unwrap_or(999999999);
-    let rrate = rrate.unwrap_or(1e-8);
-
-    // Load the XCF file
-    let xcf_header = reader.header().clone();
-    log::info!("Samples in VCF: {}", xcf_header.sample_count());
-
-    // Load sample lists as an u8 array
-    let s1 = consolidate_list(&xcf_header.samples(), s1).expect("Failed to subset sampleA");
-    let s2 = consolidate_list(&xcf_header.samples(), s2).expect("Failed to subset sampleB");
-
-    // Fetch the indices of each sample in each list
-    let i1 = get_gt_index(&xcf_header.samples(), &s1).expect("Failed to get indeces of sampleA");
-    let i2 = get_gt_index(&xcf_header.samples(), &s2).expect("Failed to get indeces of sampleB");
-
-    // Print number of samples
-    log::info!("Samples A: {}", s1.len());
-    log::info!("Samples B: {}", s2.len());
-
-    // Dies if no samples are retained
-    if s1.is_empty() || s2.is_empty() {
-        eprintln!("No samples found in the lists.");
-        std::process::exit(1);
-    }
-
-    // Start loading the genotypes here
-    // First, find the sequence index
-    let rid = reader
-        .header()
-        .name2rid(chrom.as_bytes())
-        .unwrap_or_else(|_| panic!("Chromosome ID not found {chrom}"));
-    log::info!("Chromosome {chrom} (ID: {rid})");
-
-    // Load the records, defining the counters of how many sites we skip
-    let mut multiallelic = 0;
-    // let mut monom_gt1 = 0;
-    let mut monom_gt2 = 0;
-    let mut miss_gt1 = 0;
-    let mut miss_gt2 = 0;
-    let mut pass = 0;
-    let mut skipped = 0;
-    let mut tot = 0;
-    let (positions, gt1_data, gt2_data, gd_data): (Vec<_>, Vec<_>, Vec<_>, Vec<_>) = reader
-        .records()
-        .filter(|r| {
-            let record = r.as_ref().unwrap();
-            let pos = record.pos() as u64;
-            record.rid().unwrap() == rid && (pos >= start && pos < end)
-        })
-        .filter_map(|r| {
-            let record = r.ok()?;
-            tot += 1;
-            let genotypes = record.genotypes().expect("Cannot fetch the genotypes");
-            let gt1_g = i1
-                .iter()
-                .map(|i| genotypes.get(*i))
-                .collect::<Vec<Genotype>>();
-            let gt2_g = i2
-                .iter()
-                .map(|i| genotypes.get(*i))
-                .collect::<Vec<Genotype>>();
-
-            // Check that the site is biallelic
-            let alleles1: Counter<u32> = gt1_g
-                .iter()
-                .flat_map(|g| g.iter().filter_map(|&a: &GenotypeAllele| a.index()))
-                .collect::<Counter<u32>>();
-
-            let alleles2: Counter<u32> = gt2_g
-                .iter()
-                .flat_map(|g| g.iter().filter_map(|a| a.index()))
-                .collect::<Counter<u32>>();
-
-            // Union both sets
-            let mut all_alleles: Counter<_> = alleles1.clone();
-            all_alleles.extend(&alleles2);
-
-            // Define genetic position
-            let gd = match &gdistkey {
-                Some(key) => record
-                    .info(key.as_bytes())
-                    .float()
-                    .ok()
-                    .flatten()
-                    .expect("Missing info field for genetic position")[0]
-                    as f64,
-                None => record.pos() as f64 * rrate,
-            };
-
-            // Perform filtering and counting
-            if all_alleles.len() > 2 {
-                skipped += 1;
-                multiallelic += 1;
-                None
-            } else if alleles1.is_empty() || alleles2.is_empty() {
-                skipped += 1;
-                if alleles1.is_empty() {
-                    miss_gt1 += 1;
-                };
-                if alleles2.is_empty() {
-                    miss_gt2 += 1;
-                };
-                None
-            } else if alleles2.len() == 1 || alleles2.values().min().copied()? == 1 {
-                skipped += 1;
-                monom_gt2 += 1;
-                None
-            } else {
-                pass += 1;
-                // Define reference allele as the minimum allele index
-                let ref_ix = *all_alleles
-                    .keys()
-                    .min()
-                    .expect("Can't compute reference allele index");
-                // Encode genotypes to compact i8 counts relative to ref allele
-                let gt1 = gt1_g
-                    .into_iter()
-                    .map(|gt| gt2gcount(gt, ref_ix))
-                    .collect::<Vec<i8>>();
-                // If phased, store haplotypes in gt2; else store dosages
-                let gt2 = if phased.unwrap_or(false) {
-                    gt2_g
-                        .iter()
-                        .flat_map(|gt| {
-                            gt.iter().map(|a| match a {
-                                GenotypeAllele::PhasedMissing => -9_i8,
-                                GenotypeAllele::UnphasedMissing => -9_i8,
-                                _ => a.index().unwrap() as i8,
-                            })
-                        })
-                        .collect::<Vec<i8>>()
-                } else {
-                    gt2_g
-                        .into_iter()
-                        .map(|gt| gt2gcount(gt, ref_ix))
-                        .collect::<Vec<i8>>()
-                };
-                Some((record.pos() as usize, gt1, gt2, gd))
-            }
-        })
-        .multiunzip();
-
-    // Assess everything looks good
-    if gt1_data.len() != gt2_data.len() {
-        panic!("Inconsistent data")
-    };
-    if positions.len() != gt2_data.len() {
-        panic!("Inconsistent data")
-    };
-    if positions.len() as i32 != pass {
-        panic!("Inconsistent data")
-    };
-    if tot != (pass + skipped) {
-        panic!("Inconsistent counts")
-    }
-    // Print some info
-
-    log::info!("Processed {tot} variants");
-    log::info!("Loaded {pass} variants");
-    log::info!("Skipped {skipped} variants because:");
-    log::info!(" - {multiallelic} multiallelic");
-    log::info!(" - {monom_gt2} monomorphic in pop B");
-    log::info!(" - {miss_gt1} all-missing in pop A");
-    log::info!(" - {miss_gt2} all-missing in pop B");
-    Ok(GenoData {
-        positions,
-        gt1: gt1_data,
-        gt2: gt2_data,
-        gdistances: gd_data,
-    })
-}
-
-// Load the genotypes for the given samples
+/// Load genotypes from an XCF (VCF/BCF) file into `GenoData`.
+///
+/// # Examples
+///
+/// ```ignore
+/// let data = xpclrs::io::process_xcf("in.bcf".to_string(), &s1, &s2, "1", None, None, (None, None, None, 1)).unwrap();
+/// ```
 pub fn process_xcf(
     xcf_fn: String,
     s1: &[String],
@@ -506,7 +149,7 @@ pub fn process_xcf(
     chrom: &str,
     start: Option<u64>,
     end: Option<u64>,
-    (phased, rrate, gdistkey): (Option<bool>, Option<f64>, Option<String>),
+    (phased, rrate, gdistkey, n_threads): (Option<bool>, Option<f64>, Option<String>, usize),
 ) -> Result<GenoData> {
     // Process the data depending on the presence of the index
     let start = start.unwrap_or(0);
@@ -515,13 +158,60 @@ pub fn process_xcf(
     let csi_path = format!("{xcf_fn}.csi");
     let has_index = Path::exists(Path::new(&tbi_path)) || Path::exists(Path::new(&csi_path));
     let g_data = match has_index {
-        true => indexed_xcf(xcf_fn, s1, s2, chrom, start, end, (phased, rrate, gdistkey)),
-        false => readthrough_xcf(xcf_fn, s1, s2, chrom, start, end, (phased, rrate, gdistkey)),
+        true => indexed_xcf(
+            xcf_fn,
+            s1,
+            s2,
+            chrom,
+            start,
+            end,
+            (phased, rrate, gdistkey, n_threads),
+        ),
+        false => readthrough_xcf(
+            xcf_fn,
+            s1,
+            s2,
+            chrom,
+            start,
+            end,
+            (phased, rrate, gdistkey, n_threads),
+        ),
     }
     .expect("Failed to parse the VCF/BCF file");
     Ok(g_data)
 }
 
+/// Load genotypes from PLINK BED/BIM/FAM files into `GenoData`.
+///
+/// # Examples
+///
+/// ```ignore
+/// let data = xpclrs::io::process_plink("data/plink".to_string(), &s1, &s2, "1", None, None, (None, None)).unwrap();
+/// ```
+pub fn process_plink(
+    plink_root: String,
+    s1: &[String],
+    s2: &[String],
+    chrom: &str,
+    start: Option<u64>,
+    end: Option<u64>,
+    (phased, rrate): (Option<bool>, Option<f64>),
+) -> Result<GenoData> {
+    // Process the data depending on the presence of the index
+    let start = start.unwrap_or(0);
+    // Prepare the input VCF
+    let g_data = read_plink_files(&plink_root, s1, s2, chrom, start, end, (phased, rrate))
+        .expect("Failed to parse the BED/BIM/FAM file");
+    Ok(g_data)
+}
+
+/// Create a buffered writer for plain or gzipped output.
+///
+/// # Examples
+///
+/// ```ignore
+/// let mut w = xpclrs::io::write_table("out.tsv");
+/// ```
 pub fn write_table(filename: &str) -> Box<dyn Write> {
     let path = Path::new(filename);
     let file = File::create(path)
@@ -541,10 +231,17 @@ pub fn write_table(filename: &str) -> Box<dyn Write> {
     writer
 }
 
-// The following results
-// n, (start, stop, bpi, bpe, nsnps, avail), (model_li, null_li, selectionc)
-// Map to:
-// win index, (start and stop of window), (bpi and bpe are edges),
+/// Write XP-CLR results to a delimited table.
+/// The following results
+/// n, (start, stop, bpi, bpe, nsnps, avail), (model_li, null_li, selectionc)
+/// Map to:
+/// win index, (start and stop of window), (bpi and bpe are edges),
+///
+/// # Examples
+///
+/// ```ignore
+/// xpclrs::io::to_table("1", &results, &mut writer, "tsv").unwrap();
+/// ```
 pub fn to_table(
     chrom: &str,
     xpclr_res: &[(usize, XPCLRResult)],

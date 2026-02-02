@@ -16,8 +16,8 @@ jobs:
       fail-fast: false
       matrix:
         build: [
-          ubuntu,
-          ubuntu-arm,
+          linux_x86,
+          linux_arm,
           macos_arm64,
           macos_x86_64
         ]
@@ -26,9 +26,9 @@ jobs:
             os: macos-latest
           - build: macos_x86_64
             os: macos-15-intel
-          - build: ubuntu
+          - build: linux_x86
             os: ubuntu-latest
-          - build: ubuntu-arm
+          - build: linux_arm
             os: ubuntu-24.04-arm
     steps:
     - uses: actions/checkout@v4
@@ -53,14 +53,13 @@ jobs:
     - name: Release
       run: cargo build --release
 
-    # Upload the binaries from the ubuntu analysis
+    # Upload the binaries from each build
     - name: Upload artifacts
-      if: matrix.os == 'ubuntu-latest'
       uses: actions/upload-artifact@v4
       with:
-        name: binaries
-        path: target/release
-        retention-days: 0.5
+        name: xpclrs_${{ matrix.build }}
+        path: target/release/xpclrs
+        retention-days: 1
 
   # Test the binaries
   exe:
@@ -72,18 +71,40 @@ jobs:
       - name: Download Binaries
         uses: actions/download-artifact@v4
         with:
-          name: binaries
+          name: xpclrs_linux_x86
           path: ./bin/  # This will store the downloaded artifacts in ./bin
       - name: Run help
         run: |
+          ls ./bin/
           chmod +x ./bin/xpclrs
           ./bin/xpclrs --help
-      - name: Run test
+      - name: Run test (VCF, unphased)
         run: |
           chmod +x ./bin/xpclrs
-          wget https://raw.githubusercontent.com/hardingnj/xpclr/refs/heads/master/fixture/samplesA.txt
-          wget https://raw.githubusercontent.com/hardingnj/xpclr/refs/heads/master/fixture/samplesB.txt
-          wget https://raw.githubusercontent.com/hardingnj/xpclr/refs/heads/master/fixture/small.vcf.gz
-          wget https://raw.githubusercontent.com/hardingnj/xpclr/refs/heads/master/fixture/small.vcf.gz.tbi
-          ./bin/xpclrs --input small.vcf.gz --out test --samplesA samplesA.txt --samplesB samplesB.txt --chr 3L -t 1
-          cat test.3L.xpclr
+          ./bin/xpclrs --input test/test.vcf.gz --out test --samplesA test/samplesA.txt --samplesB test/samplesB.txt --chr chr1 -t 1
+          head test.chr1.xpclr
+      - name: Run test (VCF, phased)
+        run: |
+          chmod +x ./bin/xpclrs
+          ./bin/xpclrs --input test/test.vcf.gz --out test --samplesA test/samplesA.txt --samplesB test/samplesB.txt --chr chr1 -t 1 --phased
+          head test.chr1.xpclr
+      - name: Run test (VCF, unphased, fast)
+        run: |
+          chmod +x ./bin/xpclrs
+          ./bin/xpclrs --input test/test.vcf.gz --out test --samplesA test/samplesA.txt --samplesB test/samplesB.txt --chr chr1 -t 1 --fast
+          head test.chr1.xpclr
+      - name: Run test (VCF, phased, fast)
+        run: |
+          chmod +x ./bin/xpclrs
+          ./bin/xpclrs --input test/test.vcf.gz --out test --samplesA test/samplesA.txt --samplesB test/samplesB.txt --chr chr1 -t 1 --phased --fast
+          head test.chr1.xpclr
+      - name: Run test (plink)
+        run: |
+          chmod +x ./bin/xpclrs
+          ./bin/xpclrs --input test/plink --plink --out test --samplesA test/samplesA_plink.txt --samplesB test/samplesB_plink.txt --chr 1 -t 1
+          head test.chr1.xpclr
+      - name: Run test (plink, fast)
+        run: |
+          chmod +x ./bin/xpclrs
+          ./bin/xpclrs --input test/plink --plink --out test --samplesA test/samplesA_plink.txt --samplesB test/samplesB_plink.txt --chr 1 -t 1 --fast
+          head test.chr1.xpclr
