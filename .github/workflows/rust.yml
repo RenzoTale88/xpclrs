@@ -101,10 +101,10 @@ jobs:
       - name: Run test (plink)
         run: |
           chmod +x ./bin/xpclrs
-          ./bin/xpclrs --input test/plink --plink --out test --samplesA test/samplesA_plink.txt --samplesB test/samplesB_plink.txt --chr chr1 -t 1
+          ./bin/xpclrs --input test/plink --plink --out test --samplesA test/samplesA_plink.txt --samplesB test/samplesB_plink.txt --chr 1 -t 1
           head test.chr1.xpclr
       - name: Run test (plink, fast)
         run: |
           chmod +x ./bin/xpclrs
-          ./bin/xpclrs --input test/plink --plink --out test --samplesA test/samplesA_plink.txt --samplesB test/samplesB_plink.txt --chr chr1 -t 1 --fast
+          ./bin/xpclrs --input test/plink --plink --out test --samplesA test/samplesA_plink.txt --samplesB test/samplesB_plink.txt --chr 1 -t 1 --fast
           head test.chr1.xpclr
