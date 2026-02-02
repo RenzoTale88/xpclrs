@@ -182,15 +182,6 @@ fn main() {
                 .help("Logging level."),
         )
         .get_matches();
-    // set up logging
-    let log_level = matches
-        .get_one::<String>("LOG")
-        .expect("Log level not valid")
-        .to_owned();
-    env_logger::Builder::from_env(Env::default().default_filter_or(log_level)).init();
-
-    // Initial logging
-    log::info!("xpclrs v{version}");
 
     // Fixed parameters
     let chrom = matches
@@ -219,7 +210,8 @@ fn main() {
     // Get the output path
     let out_path = matches
         .get_one::<String>("OUT")
-        .expect("Output file is required");
+        .expect("Output file is required")
+        .to_owned();
     let out_fmt = matches
         .get_one::<String>("OUTFMT")
         .expect("Invalid output format")
@@ -231,6 +223,16 @@ fn main() {
         0 => current_num_threads(),
         v => *v,
     };
+
+    // set up logging
+    let log_level = matches
+        .get_one::<String>("LOG")
+        .expect("Log level not valid")
+        .to_owned();
+    env_logger::Builder::from_env(Env::default().default_filter_or(log_level)).init();
+
+    // Initial logging
+    log::info!("xpclrs v{version}");
 
     // Get the sample lists
     let sample_a = matches
