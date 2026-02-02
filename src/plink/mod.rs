@@ -223,16 +223,21 @@ pub fn read_plink_files(
                         _ => -9_i8,
                     })
                     .collect::<Vec<i8>>();
+                // Define if all variants are missing in GT1 or GT2
                 let all_missing_g1 = gt1.iter().all(|i| *i == -9_i8);
                 let all_missing_g2 = gt2.iter().all(|i| *i == -9_i8);
+                // Get non-missing genotypes in GT2
                 let non_missing = gt2
                     .iter()
                     .filter_map(|&i| if i != -9_i8 { Some(i as i64) } else { None })
                     .collect::<Vec<i64>>();
+                // Count how many minor alleles are present
                 let n_minor_alleles: i64 = non_missing.iter().sum();
-                let monom_or_singleton_gt2 = n_minor_alleles <= 1
-                    || non_missing.iter().all(|i| *i == 0_i64)
-                    || non_missing.iter().all(|i| *i == 2_i64);
+                let n_major_alleles: i64 = (non_missing.iter().len() as i64 * 2) - n_minor_alleles;
+                // If the minor allele count is <=1 or >=(n_samples * 2 -1),
+                // the variants are monomorphic or singleton (only 1 major or minor)
+                // alleles; discard these.
+                let monom_or_singleton_gt2 = n_minor_alleles <= 1 || n_major_alleles <= 1;
                 if all_missing_g1 || all_missing_g2 {
                     skipped += 1;
                     tot += 1;
