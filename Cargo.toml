@@ -6,8 +6,8 @@ edition = "2021"
 license = "MIT"
 repository = "https://github.com/RenzoTale88/xpclrs"
 readme = "README.md"
-keywords = ["genome", "bioinformatics", "sequencing"]
-categories = ["bioinformatics"]
+keywords = ["genome", "bioinformatics", "sequencing", "selection"]
+categories = ["science::bioinformatics"]
 description = "A high-performance rust implementation of the XP-CLR method."
 
 [dependencies]
