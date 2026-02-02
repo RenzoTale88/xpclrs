@@ -53,14 +53,13 @@ jobs:
     - name: Release
       run: cargo build --release
 
-    # Upload the binaries from the ubuntu analysis
+    # Upload the binaries from each build
     - name: Upload artifacts
-      if: matrix.os == 'ubuntu-latest'
       uses: actions/upload-artifact@v4
       with:
-        name: binaries
+        name: binaries-${{ matrix.build }}
         path: target/release
-        retention-days: 0.5
+        retention-days: 1
 
   # Test the binaries
   exe:
@@ -72,7 +71,7 @@ jobs:
       - name: Download Binaries
         uses: actions/download-artifact@v4
         with:
-          name: binaries
+          name: binaries-ubuntu
           path: ./bin/  # This will store the downloaded artifacts in ./bin
       - name: Run help
         run: |
