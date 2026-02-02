@@ -72,38 +72,38 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           name: xpclrs_linux_x86
-          path: ./bin/  # This will store the downloaded artifacts in ./bin
+          path: ./bin/xpclrs  # This will store the downloaded artifacts in ./bin
       - name: Run help
         run: |
-          chmod +x ./bin/xpclrs_linux_x86
-          ./bin/xpclrs_linux_x86 --help
+          chmod +x ./bin/xpclrs
+          ./bin/xpclrs --help
       - name: Run test (VCF, unphased)
         run: |
-          chmod +x ./bin/xpclrs_linux_x86
-          ./bin/xpclrs_linux_x86 --input test/test.vcf.gz --out test --samplesA test/samplesA.txt --samplesB test/samplesB.txt --chr chr1 -t 1
+          chmod +x ./bin/xpclrs
+          ./bin/xpclrs --input test/test.vcf.gz --out test --samplesA test/samplesA.txt --samplesB test/samplesB.txt --chr chr1 -t 1
           head test.chr1.xpclr
       - name: Run test (VCF, phased)
         run: |
-          chmod +x ./bin/xpclrs_linux_x86
-          ./bin/xpclrs_linux_x86 --input test/test.vcf.gz --out test --samplesA test/samplesA.txt --samplesB test/samplesB.txt --chr chr1 -t 1 --phased
+          chmod +x ./bin/xpclrs
+          ./bin/xpclrs --input test/test.vcf.gz --out test --samplesA test/samplesA.txt --samplesB test/samplesB.txt --chr chr1 -t 1 --phased
           head test.chr1.xpclr
       - name: Run test (VCF, unphased, fast)
         run: |
-          chmod +x ./bin/xpclrs_linux_x86
-          ./bin/xpclrs_linux_x86 --input test/test.vcf.gz --out test --samplesA test/samplesA.txt --samplesB test/samplesB.txt --chr chr1 -t 1 --fast
+          chmod +x ./bin/xpclrs
+          ./bin/xpclrs --input test/test.vcf.gz --out test --samplesA test/samplesA.txt --samplesB test/samplesB.txt --chr chr1 -t 1 --fast
           head test.chr1.xpclr
       - name: Run test (VCF, phased, fast)
         run: |
-          chmod +x ./bin/xpclrs_linux_x86
-          ./bin/xpclrs_linux_x86 --input test/test.vcf.gz --out test --samplesA test/samplesA.txt --samplesB test/samplesB.txt --chr chr1 -t 1 --phased --fast
+          chmod +x ./bin/xpclrs
+          ./bin/xpclrs --input test/test.vcf.gz --out test --samplesA test/samplesA.txt --samplesB test/samplesB.txt --chr chr1 -t 1 --phased --fast
           head test.chr1.xpclr
       - name: Run test (plink)
         run: |
-          chmod +x ./bin/xpclrs_linux_x86
-          ./bin/xpclrs_linux_x86 --input test/plink --plink --out test --samplesA test/samplesA.txt --samplesB test/samplesB.txt --chr chr1 -t 1
+          chmod +x ./bin/xpclrs
+          ./bin/xpclrs --input test/plink --plink --out test --samplesA test/samplesA.txt --samplesB test/samplesB.txt --chr chr1 -t 1
           head test.chr1.xpclr
       - name: Run test (plink, fast)
         run: |
-          chmod +x ./bin/xpclrs_linux_x86
-          ./bin/xpclrs_linux_x86 --input test/plink --plink --out test --samplesA test/samplesA.txt --samplesB test/samplesB.txt --chr chr1 -t 1 --fast
+          chmod +x ./bin/xpclrs
+          ./bin/xpclrs --input test/plink --plink --out test --samplesA test/samplesA.txt --samplesB test/samplesB.txt --chr chr1 -t 1 --fast
           head test.chr1.xpclr
