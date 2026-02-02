@@ -3,10 +3,6 @@ A rust implementation of the XP-CLR method.
 This implementation achieves near identical results in a fraction of the run time.
 The software analyses chromosome 24 of the VarGoat dataset (777,865 total variants, 236,145 used for the analysis, with two groups of 32 and 22 individuals, respectively) in 00m:26s and using 77Mb of memory, versus 55m:20s and 321Mb of the original implementation.
 
-> [!WARNING]
-> The software is still under active development, and is not entirely bug free. There are small differences in the results obtained with the original tool.
-
-
 ## Installation
 The compilation of the software requires the following packages to be installed:
 1. [openblas](https://github.com/OpenMathLib/OpenBLAS)
@@ -14,17 +10,24 @@ The compilation of the software requires the following packages to be installed:
 3. [curl](https://curl.se/)
 4. [rust](https://rust-lang.org/)
 
-Then, clone and compile the code:
+Then, install with cargo:
 ```
-git clone https://www.github.com/RenzoTale88/xpclrs
-pushd xpclrs
-cargo install --path .
-popd
+cargo install xpclrs
 ```
 
 Check that the package is successfully installed with:
 ```
 xpclrs --help
+```
+
+### Install with Docker/Singularity
+The software is also available as a docker container in dockerhub. You can install it by pulling the image with docker:
+```
+docker pull tale88/xpclrs:latest
+```
+Or with singularity:
+```
+singularity build xpclrs.sif tale88/xpclrs:latest
 ```
 
 ## Input
@@ -75,4 +78,3 @@ Can test with the demo data in the original xpclr repository [here](https://gith
 ## Citation
 If you use the tool, please cite:
 > Chen H, Patterson N, Reich D. Population differentiation as a test for selective sweeps. Genome Res. 2010 Mar;20(3):393-402. doi: 10.1101/gr.100545.109. Epub 2010 Jan 19. PMID: 20086244; PMCID: PMC2840981.
-> Talenti A.
