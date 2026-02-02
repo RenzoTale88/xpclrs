@@ -15,9 +15,14 @@ pub struct PlinkData {
 }
 
 // Primary BED mode ==> SNP major, i.e. codify by individual for SNP
-fn bed_snp_major(bed_file: &mut File, n_snps: usize, n_samples: usize) -> Vec<Vec<u8>> {
+fn bed_snp_major(bed_file: &mut File, n_samples: usize, kept_sites: &[bool]) -> Vec<Vec<u8>> {
     // Initialize genotype matrix S X I
-    let mut gts = vec![vec![0u8; n_samples]; n_snps];
+    let n_kept_snps = kept_sites
+        .iter()
+        .filter(|&&v| v)
+        .collect::<Vec<&bool>>()
+        .len();
+    let mut gts = vec![vec![0u8; n_samples]; n_kept_snps];
 
     // Read genotypes
     let bytes_per_snp = n_samples.div_ceil(4); // Ensure we have a full byte every time
@@ -25,18 +30,22 @@ fn bed_snp_major(bed_file: &mut File, n_snps: usize, n_samples: usize) -> Vec<Ve
 
     // Initiate progress bar
     log::info!("Load genotypes...");
-
-    for snp_row in gts.iter_mut() {
+    let mut kept_snp_idx = 0;
+    for keep_site in kept_sites.iter() {
         bed_file
             .read_exact(&mut snp_bytes)
             .expect("Cannot read bytes");
-        for (sample_idx, slot) in snp_row.iter_mut().enumerate() {
-            let byte_index = sample_idx / 4; // Which byte (0, 1, 2, ...)
-            let shift = 2 * (sample_idx % 4); // Shift to get the right pair
-            let bits = (snp_bytes[byte_index] >> shift) & 0b11;
+        if *keep_site {
+            for (sample_idx, slot) in gts[kept_snp_idx].iter_mut().enumerate() {
+                let byte_index = sample_idx / 4; // Which byte (0, 1, 2, ...)
+                let shift = 2 * (sample_idx % 4); // Shift to get the right pair
+                let bits = (snp_bytes[byte_index] >> shift) & 0b11;
 
-            *slot = bits;
+                *slot = bits;
+            }
+            kept_snp_idx += 1;
         }
+
     }
     log::info!("Genotypes loaded.");
     log::info!("Matrix shape: {} x {}.", gts.len(), gts[0].len());
@@ -44,26 +53,34 @@ fn bed_snp_major(bed_file: &mut File, n_snps: usize, n_samples: usize) -> Vec<Ve
 }
 
 // Other BED mode ==> individual major, i.e. codify by SNPs for individual
-fn bed_ind_major(bed_file: &mut File, n_snps: usize, n_samples: usize) -> Vec<Vec<u8>> {
+fn bed_ind_major(bed_file: &mut File, n_samples: usize, kept_sites: &[bool]) -> Vec<Vec<u8>> {
     // Initialize genotype matrix I X S
-    let mut gts = vec![vec![0u8; n_samples]; n_snps];
+    let n_kept_snps = kept_sites
+        .iter()
+        .filter(|&&v| v)
+        .collect::<Vec<&bool>>()
+        .len();
+    let mut gts = vec![vec![0u8; n_samples]; n_kept_snps];
 
     // Read genotypes
-    let bytes_per_ind = n_snps.div_ceil(4);
+    let bytes_per_ind = n_kept_snps.div_ceil(4);
     let mut ind_bytes = vec![0u8; bytes_per_ind];
 
     // Load n_snps at the same time, representing one individual
-    for bit_row in gts.iter_mut().take(n_snps) {
+    for sample_idx in 0..gts[0].len() {
         bed_file
             .read_exact(&mut ind_bytes)
             .expect("Cannot read bytes");
+        let mut kept_snp_idx = 0;
+        for (snp_idx, keep_site) in kept_sites.iter().enumerate() {
+            if *keep_site {
+                let byte_index = snp_idx / 4; // Which byte (0, 1, 2, ...)
+                let shift = 2 * (snp_idx % 4); // Shift to get the right pair
+                let bits = (ind_bytes[byte_index] >> shift) & 0b11;
 
-        for (snp_idx, slot) in bit_row.iter_mut().enumerate() {
-            let byte_index = snp_idx / 4; // Which byte (0, 1, 2, ...)
-            let shift = 2 * (snp_idx % 4); // Shift to get the right pair
-            let bits = (ind_bytes[byte_index] >> shift) & 0b11;
-
-            *slot = bits;
+                gts[kept_snp_idx][sample_idx] = bits;
+                kept_snp_idx += 1;
+            }
         }
     }
     log::info!("Genotypes loaded.");
@@ -183,15 +200,11 @@ pub fn read_plink_files(
     // Define if it is SNP major or individual major
     let genotypes: Vec<Vec<u8>> = if magic[2] == 0x01 {
         log::info!("Reading in SNP-major mode.");
-        bed_snp_major(&mut bed_file, n_snps, n_samples)
+        bed_snp_major(&mut bed_file, n_samples, &keep_vec)
     } else {
         log::info!("Reading in Individual-major mode.");
-        bed_ind_major(&mut bed_file, n_snps, n_samples)
-    }
-    .into_iter()
-    .zip(keep_vec)
-    .filter_map(|(gt_row, keep)| if keep { Some(gt_row) } else { None })
-    .collect();
+        bed_ind_major(&mut bed_file, n_samples, &keep_vec)
+    };
 
     // Filter the dataset
     let mut monom_gt2 = 0;
