@@ -72,9 +72,10 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           name: xpclrs_linux_x86
-          path: ./bin/xpclrs  # This will store the downloaded artifacts in ./bin
+          path: ./bin/  # This will store the downloaded artifacts in ./bin
       - name: Run help
         run: |
+          ls ./bin/
           chmod +x ./bin/xpclrs
           ./bin/xpclrs --help
       - name: Run test (VCF, unphased)
