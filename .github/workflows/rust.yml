@@ -78,12 +78,33 @@ jobs:
         run: |
           chmod +x ./bin/xpclrs
           ./bin/xpclrs --help
-      - name: Run test
+      - name: Run test (VCF, unphased)
         run: |
           chmod +x ./bin/xpclrs
-          wget https://raw.githubusercontent.com/hardingnj/xpclr/refs/heads/master/fixture/samplesA.txt
-          wget https://raw.githubusercontent.com/hardingnj/xpclr/refs/heads/master/fixture/samplesB.txt
-          wget https://raw.githubusercontent.com/hardingnj/xpclr/refs/heads/master/fixture/small.vcf.gz
-          wget https://raw.githubusercontent.com/hardingnj/xpclr/refs/heads/master/fixture/small.vcf.gz.tbi
-          ./bin/xpclrs --input small.vcf.gz --out test --samplesA samplesA.txt --samplesB samplesB.txt --chr 3L -t 1
-          cat test.3L.xpclr
+          ./bin/xpclrs --input test/test.vcf.gz --out test --samplesA test/samplesA.txt --samplesB test/samplesB.txt --chr chr1 -t 1
+          head test.chr1.xpclr
+      - name: Run test (VCF, phased)
+        run: |
+          chmod +x ./bin/xpclrs
+          ./bin/xpclrs --input test/test.vcf.gz --out test --samplesA test/samplesA.txt --samplesB test/samplesB.txt --chr chr1 -t 1 --phased
+          head test.chr1.xpclr
+      - name: Run test (VCF, unphased, fast)
+        run: |
+          chmod +x ./bin/xpclrs
+          ./bin/xpclrs --input test/test.vcf.gz --out test --samplesA test/samplesA.txt --samplesB test/samplesB.txt --chr chr1 -t 1 --fast
+          head test.chr1.xpclr
+      - name: Run test (VCF, phased, fast)
+        run: |
+          chmod +x ./bin/xpclrs
+          ./bin/xpclrs --input test/test.vcf.gz --out test --samplesA test/samplesA.txt --samplesB test/samplesB.txt --chr chr1 -t 1 --phased --fast
+          head test.chr1.xpclr
+      - name: Run test (plink)
+        run: |
+          chmod +x ./bin/xpclrs
+          ./bin/xpclrs --input test/plink --plink --out test --samplesA test/samplesA.txt --samplesB test/samplesB.txt --chr chr1 -t 1
+          head test.chr1.xpclr
+      - name: Run test (plink, fast)
+        run: |
+          chmod +x ./bin/xpclrs
+          ./bin/xpclrs --input test/plink --plink --out test --samplesA test/samplesA.txt --samplesB test/samplesB.txt --chr chr1 -t 1 --fast
+          head test.chr1.xpclr
