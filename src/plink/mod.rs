@@ -4,6 +4,7 @@ This module provides the binary plink-specific I/O functions.
 use crate::io::{consolidate_list, get_gt_index, GenoData};
 use itertools::izip;
 use itertools::MultiUnzip;
+use rustc_hash::FxHashMap;
 use std::fs::File;
 use std::io::{self, BufRead, BufReader, Read};
 
@@ -15,27 +16,45 @@ pub struct PlinkData {
 }
 
 // Primary BED mode ==> SNP major, i.e. codify by individual for SNP
-fn bed_snp_major(bed_file: &mut File, n_snps: usize, n_samples: usize) -> Vec<Vec<u8>> {
+fn bed_snp_major(
+    bed_file: &mut File,
+    kept_samples: &[bool],
+    samples_mat_idx: FxHashMap<usize, usize>,
+    kept_sites: &[bool],
+) -> Vec<Vec<u8>> {
     // Initialize genotype matrix S X I
-    let mut gts = vec![vec![0u8; n_samples]; n_snps];
+    let n_kept_snps = kept_sites
+        .iter()
+        .filter(|&&v| v)
+        .collect::<Vec<&bool>>()
+        .len();
+    let n_kept_samples = samples_mat_idx.len();
+    let mut gts = vec![vec![0u8; n_kept_samples]; n_kept_snps];
 
     // Read genotypes
-    let bytes_per_snp = n_samples.div_ceil(4); // Ensure we have a full byte every time
+    let bytes_per_snp = kept_samples.len().div_ceil(4); // Ensure we have a full byte every time
     let mut snp_bytes = vec![0u8; bytes_per_snp];
 
     // Initiate progress bar
     log::info!("Load genotypes...");
-
-    for snp_row in gts.iter_mut() {
+    let mut kept_snp_idx = 0;
+    for keep_site in kept_sites.iter() {
         bed_file
             .read_exact(&mut snp_bytes)
             .expect("Cannot read bytes");
-        for (sample_idx, slot) in snp_row.iter_mut().enumerate() {
-            let byte_index = sample_idx / 4; // Which byte (0, 1, 2, ...)
-            let shift = 2 * (sample_idx % 4); // Shift to get the right pair
-            let bits = (snp_bytes[byte_index] >> shift) & 0b11;
+        if *keep_site {
+            for (sample_idx, kept_sample) in kept_samples.iter().enumerate() {
+                if !*kept_sample {
+                    continue;
+                }
+                let sample_idx_in_mat = samples_mat_idx.get(&sample_idx).expect("Missing index");
+                let byte_index = sample_idx / 4; // Which byte (0, 1, 2, ...)
+                let shift = 2 * (sample_idx % 4); // Shift to get the right pair
+                let bits = (snp_bytes[byte_index] >> shift) & 0b11;
 
-            *slot = bits;
+                gts[kept_snp_idx][*sample_idx_in_mat] = bits;
+            }
+            kept_snp_idx += 1;
         }
     }
     log::info!("Genotypes loaded.");
@@ -44,26 +63,44 @@ fn bed_snp_major(bed_file: &mut File, n_snps: usize, n_samples: usize) -> Vec<Ve
 }
 
 // Other BED mode ==> individual major, i.e. codify by SNPs for individual
-fn bed_ind_major(bed_file: &mut File, n_snps: usize, n_samples: usize) -> Vec<Vec<u8>> {
+fn bed_ind_major(
+    bed_file: &mut File,
+    kept_samples: &[bool],
+    samples_mat_idx: FxHashMap<usize, usize>,
+    kept_sites: &[bool],
+) -> Vec<Vec<u8>> {
     // Initialize genotype matrix I X S
-    let mut gts = vec![vec![0u8; n_samples]; n_snps];
+    let n_kept_snps = kept_sites
+        .iter()
+        .filter(|&&v| v)
+        .collect::<Vec<&bool>>()
+        .len();
+    let n_kept_samples = samples_mat_idx.len();
+    let mut gts = vec![vec![0u8; n_kept_samples]; n_kept_snps];
 
     // Read genotypes
-    let bytes_per_ind = n_snps.div_ceil(4);
+    let bytes_per_ind = n_kept_snps.div_ceil(4);
     let mut ind_bytes = vec![0u8; bytes_per_ind];
 
     // Load n_snps at the same time, representing one individual
-    for bit_row in gts.iter_mut().take(n_snps) {
+    for (sample_idx, kept_sample) in kept_samples.iter().enumerate() {
         bed_file
             .read_exact(&mut ind_bytes)
             .expect("Cannot read bytes");
+        if !*kept_sample {
+            continue;
+        }
+        let sample_idx_in_mat = samples_mat_idx.get(&sample_idx).expect("Missing index");
+        let mut kept_snp_idx = 0;
+        for (snp_idx, keep_site) in kept_sites.iter().enumerate() {
+            if *keep_site {
+                let byte_index = snp_idx / 4; // Which byte (0, 1, 2, ...)
+                let shift = 2 * (snp_idx % 4); // Shift to get the right pair
+                let bits = (ind_bytes[byte_index] >> shift) & 0b11;
 
-        for (snp_idx, slot) in bit_row.iter_mut().enumerate() {
-            let byte_index = snp_idx / 4; // Which byte (0, 1, 2, ...)
-            let shift = 2 * (snp_idx % 4); // Shift to get the right pair
-            let bits = (ind_bytes[byte_index] >> shift) & 0b11;
-
-            *slot = bits;
+                gts[kept_snp_idx][*sample_idx_in_mat] = bits;
+                kept_snp_idx += 1;
+            }
         }
     }
     log::info!("Genotypes loaded.");
@@ -108,18 +145,47 @@ pub fn read_plink_files(
         })
         .collect();
     let sample_ids: Vec<&[u8]> = sample_ids_owned.iter().map(|id| id.as_slice()).collect();
-    // Number of samples for later use.
-    let n_samples = sample_ids.len();
     // Load sample lists as an u8 array
     let s1 = consolidate_list(&sample_ids, s1).expect("Failed to subset sampleA");
     let s2 = consolidate_list(&sample_ids, s2).expect("Failed to subset sampleB");
     // Fetch the indices of each sample in each list
-    let i1 = get_gt_index(&sample_ids, &s1).expect("Failed to get indeces of sampleA");
-    let i2 = get_gt_index(&sample_ids, &s2).expect("Failed to get indeces of sampleB");
+    let i1_o = get_gt_index(&sample_ids, &s1).expect("Failed to get indeces of sampleA");
+    let i2_o = get_gt_index(&sample_ids, &s2).expect("Failed to get indeces of sampleB");
+    // Create a vector of indexes of samples to retain, and a
+    // Second vector of unique samples to keep
+    let mut individuals_ixs: Vec<usize> = [&i1_o[..], &i2_o[..]].concat();
+    individuals_ixs.sort();
+    individuals_ixs.dedup();
+    let new_indexes = individuals_ixs
+        .iter()
+        .enumerate()
+        .map(|(e, v)| (*v, e))
+        .collect::<FxHashMap<usize, usize>>();
+    // Create new group indexes
+    let i1 = i1_o
+        .iter()
+        .map(|&idx| new_indexes.get(&idx).expect("Missing index"))
+        .copied()
+        .collect::<Vec<usize>>();
+    let i2 = i2_o
+        .iter()
+        .map(|&idx| new_indexes.get(&idx).expect("Missing index"))
+        .copied()
+        .collect::<Vec<usize>>();
+    // Generate a vector of retained samples
+    let kept_samples: Vec<bool> = sample_ids
+        .iter()
+        .enumerate()
+        .map(|(idx, _)| individuals_ixs.contains(&idx))
+        .collect();
 
     // Print number of samples
     log::info!("Samples A: {}", i1.len());
     log::info!("Samples B: {}", i2.len());
+    log::debug!("Old samples indexes A: {:?}", i1_o);
+    log::debug!("New samples indexes A: {:?}", i1);
+    log::debug!("Old samples indexes B: {:?}", i2_o);
+    log::debug!("New samples indexes B: {:?}", i2);
 
     // Dies if no samples are retained
     if s1.is_empty() || s2.is_empty() {
@@ -183,15 +249,11 @@ pub fn read_plink_files(
     // Define if it is SNP major or individual major
     let genotypes: Vec<Vec<u8>> = if magic[2] == 0x01 {
         log::info!("Reading in SNP-major mode.");
-        bed_snp_major(&mut bed_file, n_snps, n_samples)
+        bed_snp_major(&mut bed_file, &kept_samples, new_indexes, &keep_vec)
     } else {
         log::info!("Reading in Individual-major mode.");
-        bed_ind_major(&mut bed_file, n_snps, n_samples)
-    }
-    .into_iter()
-    .zip(keep_vec)
-    .filter_map(|(gt_row, keep)| if keep { Some(gt_row) } else { None })
-    .collect();
+        bed_ind_major(&mut bed_file, &kept_samples, new_indexes, &keep_vec)
+    };
 
     // Filter the dataset
     let mut monom_gt2 = 0;
