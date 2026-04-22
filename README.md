@@ -103,6 +103,11 @@ It is also possible to test the tool using the demo data in the [original xpclr 
 
 ## Citation
 If you use the tool, please cite:
+
 > Chen H, Patterson N, Reich D. Population differentiation as a test for selective sweeps. Genome Res. 2010 Mar;20(3):393-402. doi: 10.1101/gr.100545.109. Epub 2010 Jan 19. PMID: 20086244; PMCID: PMC2840981.
-> The original xpclr tool [here](https://github.com/hardingnj/xpclr)
+
+The original xpclr tool:
+> [xpclr](https://github.com/hardingnj/xpclr)
+
+The preprint:
 > Talenti A. XPCLRS: Fast Selection Signature Detection Using Cross-Population Composite Likelihood Ratio. bioRxiv 2026.02.27.708459. doi: 10.64898/2026.02.27.708459.
