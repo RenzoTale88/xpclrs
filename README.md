@@ -75,7 +75,8 @@ Options:
       --plink                 Input is in PLINK binary format (.bed/.bim/.fam) rather than VCF/BCF; EXPERIMENTAL.
   -l, --log <LOG>             Logging level. [default: info] [possible values: info, debug]
   -h, --help                  Print help
-  -V, --version               Print version```
+  -V, --version               Print version
+```
 
 Users can perform a trial run on the demo data provided by this repository with the command:
 ```
