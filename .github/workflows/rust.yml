@@ -61,6 +61,14 @@ jobs:
         path: target/release/xpclrs
         retention-days: 1
 
+    # Upload the binaries from each build
+    - name: Upload artifacts
+      uses: actions/upload-artifact@v4
+      with:
+        name: clrs_${{ matrix.build }}
+        path: target/release/clrs
+        retention-days: 1
+
   # Test the binaries
   exe:
     needs: build  # This job depends on the build job
@@ -68,16 +76,22 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       # Download the Ubuntu artifact from the build job
-      - name: Download Binaries
+      - name: Download XPCLRS Binaries
         uses: actions/download-artifact@v4
         with:
           name: xpclrs_linux_x86
           path: ./bin/  # This will store the downloaded artifacts in ./bin
+      - name: Download CLRS Binaries
+        uses: actions/download-artifact@v4
+        with:
+          name: clrs_linux_x86
+          path: ./bin/  # This will store the downloaded artifacts in ./bin
       - name: Run help
         run: |
           ls ./bin/
-          chmod +x ./bin/xpclrs
+          chmod +x ./bin/xpclrs ./bin/clrs
           ./bin/xpclrs --help
+          ./bin/clrs --help
       - name: Run test (VCF, unphased)
         run: |
           chmod +x ./bin/xpclrs
@@ -108,3 +122,13 @@ jobs:
           chmod +x ./bin/xpclrs
           ./bin/xpclrs --input test/plink --plink --out test --samplesA test/samplesA_plink.txt --samplesB test/samplesB_plink.txt --chr 1 -t 1 --fast
           head test.chr1.xpclr
+      - name: Run CLR test (VCF)
+        run: |
+          chmod +x ./bin/clrs
+          ./bin/clrs --input test/test.vcf.gz --out test --samples test/samplesA.txt --chr chr1 -t 1
+          head test.chr1.clr
+      - name: Run CLR test (plink)
+        run: |
+          chmod +x ./bin/clrs
+          ./bin/clrs --input test/plink --plink --out test --samples test/samplesA_plink.txt --chr 1 -t 1
+          head test.chr1.clr
