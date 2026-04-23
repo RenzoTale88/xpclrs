@@ -3,7 +3,7 @@ name: crates
 # Runs on nf-core repo releases and push event to 'dev' branch (PR merges)
 on:
   release:
-    types: [published]
+    types: [created]
 
 jobs:
   push_cratesio:
