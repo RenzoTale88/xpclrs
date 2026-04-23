@@ -3,7 +3,7 @@ use env_logger::{self, Env};
 use rayon::current_num_threads;
 use xpclrs::{
     io::{process_plink, process_xcf, read_file, to_table, write_table},
-    methods::xpclr,
+    methods::clr,
 };
 
 /*
@@ -51,15 +51,6 @@ fn main() {
                 .default_value("1e-8")
                 .value_parser(value_parser!(f64))
                 .help("Recombination rate per base."),
-        )
-        .arg(
-            Arg::new("LDCUTOFF")
-                .long("ld")
-                .short('L')
-                .required(false)
-                .default_value("0.95")
-                .value_parser(value_parser!(f64))
-                .help("LD cutoff."),
         )
         .arg(
             Arg::new("MAXSNPS")
@@ -151,14 +142,6 @@ fn main() {
                 .help("Format to save the output (csv, tsv, txt)"),
         )
         .arg(
-            Arg::new("FAST")
-                .short('F')
-                .long("fast")
-                .required(false)
-                .action(ArgAction::SetTrue)
-                .help("Run analysis in fast mode (faster integration, but gives results that are less accurate compared with the original tool)"),
-        )
-        .arg(
             Arg::new("PLINK")
                 .long("plink")
                 .required(false)
@@ -187,11 +170,9 @@ fn main() {
     let end = matches.get_one::<u64>("STOP").copied();
     let minsnps = matches.get_one::<u64>("MINSNPS").copied().unwrap();
     let maxsnps = matches.get_one::<u64>("MAXSNPS").copied().unwrap();
-    let ldcutoff = matches.get_one::<f64>("LDCUTOFF").copied();
     let rrate = matches.get_one::<f64>("RECRATE").copied();
     let distkey = matches.get_one::<String>("DISTKEYS").cloned();
     let phased = matches.get_one::<bool>("PHASED").copied();
-    let fast = matches.get_one::<bool>("FAST").copied();
     let plink = matches.get_one::<bool>("PLINK").copied().unwrap_or(false);
 
     // Get the input file
@@ -259,7 +240,8 @@ fn main() {
             end,
             (phased, rrate, distkey, n_threads),
         )
-    }.expect("Failed loading genotype data");
+    }
+    .expect("Failed loading genotype data");
 
     // Establish the windows
     let end = match end {
@@ -300,16 +282,8 @@ fn main() {
     // Prepare output file
     // Run CLR
     pool.install(|| {
-        let clr_res = clr(
-            g_data,
-            windows,
-            ldcutoff,
-            maxsnps as usize,
-            minsnps as usize,
-            phased,
-            fast
-        )
-        .expect("Failed running the CLR function");
+        let clr_res = clr(g_data, windows, maxsnps as usize, minsnps as usize, phased)
+            .expect("Failed running the CLR function");
         // Write output
         log::info!("Writing output file to {out_path}...");
         let mut clr_tsv = write_table(&format!("{out_path}.{chrom}.clr"));

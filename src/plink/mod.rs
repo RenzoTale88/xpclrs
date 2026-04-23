@@ -351,7 +351,6 @@ pub fn read_plink_files_pair(
     })
 }
 
-
 pub fn read_plink_files(
     prefix: &str,
     s1: &[String],
@@ -384,7 +383,8 @@ pub fn read_plink_files(
     // Load sample lists as an u8 array
     let s1 = consolidate_list(&sample_ids, s1).expect("Failed to subset sampleA");
     // Fetch the indices of each sample in each list
-    let mut individuals_ixs = get_gt_index(&sample_ids, &s1).expect("Failed to get indeces of sampleA");
+    let mut individuals_ixs =
+        get_gt_index(&sample_ids, &s1).expect("Failed to get indeces of sampleA");
     individuals_ixs.sort();
     individuals_ixs.dedup();
     let new_indexes = individuals_ixs
@@ -481,7 +481,6 @@ pub fn read_plink_files(
     // Filter the dataset
     let mut monom_gt1 = 0;
     let mut miss_gt1 = 0;
-    let mut miss_gt2 = 0;
     let mut pass = 0;
     let mut skipped = 0;
     let mut tot = 0;

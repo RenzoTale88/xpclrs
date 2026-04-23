@@ -3,7 +3,7 @@ This module provides the shared I/O functions (e.g. VCF/BCF readers, text reader
 */
 use crate::methods::XPCLRResult;
 use crate::plink::{read_plink_files, read_plink_files_pair};
-use crate::xcf::{indexed_xcf, readthrough_xcf, indexed_xcf_pair, readthrough_xcf_pair};
+use crate::xcf::{indexed_xcf, indexed_xcf_pair, readthrough_xcf, readthrough_xcf_pair};
 use anyhow::Result;
 use flate2::write;
 use flate2::Compression;
@@ -221,7 +221,9 @@ pub fn process_plink(
     let start = start.unwrap_or(0);
     // Prepare the input VCF
     let g_data = match s2 {
-        Some(popfile) => read_plink_files_pair(&plink_root, s1, popfile, chrom, start, end, (phased, rrate)),
+        Some(popfile) => {
+            read_plink_files_pair(&plink_root, s1, popfile, chrom, start, end, (phased, rrate))
+        }
         None => read_plink_files(&plink_root, s1, chrom, start, end, (phased, rrate)),
     }
     .expect("Failed to parse the BED/BIM/FAM file");

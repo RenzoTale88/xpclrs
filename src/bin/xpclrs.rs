@@ -273,7 +273,8 @@ fn main() {
             end,
             (phased, rrate, distkey, n_threads),
         )
-    }.expect("Failed loading genotype data");
+    }
+    .expect("Failed loading genotype data");
 
     // Establish the windows
     let end = match end {
@@ -321,7 +322,7 @@ fn main() {
             maxsnps as usize,
             minsnps as usize,
             phased,
-            fast
+            fast,
         )
         .expect("Failed running the XP-CLR function");
         // Write output

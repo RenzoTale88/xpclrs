@@ -612,7 +612,6 @@ pub fn readthrough_xcf_pair(
     })
 }
 
-
 /// Process an indexed XCF file into `GenoData` for CLR.
 ///
 /// # Examples
@@ -697,10 +696,7 @@ pub fn indexed_xcf(
                 }
 
                 // Union both sets
-                let all_alleles: Counter<u32> = alleles1
-                    .iter()
-                    .map(|(&k, &v)| (k, v))
-                    .collect();
+                let all_alleles: Counter<u32> = alleles1.iter().map(|(&k, &v)| (k, v)).collect();
 
                 // Define genetic position
                 let gd = match &gdistkey {
@@ -724,6 +720,10 @@ pub fn indexed_xcf(
                     if alleles1.is_empty() {
                         miss_gt1 += 1;
                     };
+                    None
+                } else if alleles1.len() == 1 || alleles1.values().min().copied()? == 1 {
+                    skipped += 1;
+                    monom_gt1 += 1;
                     None
                 } else {
                     pass += 1;
@@ -754,7 +754,7 @@ pub fn indexed_xcf(
                     .map(|i| genotypes.get(*i))
                     .collect::<Vec<Genotype>>();
 
-                    // Count alleles from both populations in a single pass
+                // Count alleles from both populations in a single pass
                 let mut alleles1: Counter<u32> = Counter::new();
 
                 for g in &gt1_g {
@@ -764,10 +764,7 @@ pub fn indexed_xcf(
                 }
 
                 // Union both sets
-                let all_alleles: Counter<u32> = alleles1
-                    .iter()
-                    .map(|(&k, &v)| (k, v))
-                    .collect();
+                let all_alleles: Counter<u32> = alleles1.iter().map(|(&k, &v)| (k, v)).collect();
 
                 // Define genetic position
                 let gd = match &gdistkey {
@@ -791,6 +788,10 @@ pub fn indexed_xcf(
                     if alleles1.is_empty() {
                         miss_gt1 += 1;
                     };
+                    None
+                } else if alleles1.len() == 1 || alleles1.values().min().copied()? == 1 {
+                    skipped += 1;
+                    monom_gt1 += 1;
                     None
                 } else {
                     pass += 1;
@@ -925,10 +926,7 @@ pub fn readthrough_xcf(
                 }
 
                 // Union both sets
-                let all_alleles: Counter<u32> = alleles1
-                    .iter()
-                    .map(|(&k, &v)| (k, v))
-                    .collect();
+                let all_alleles: Counter<u32> = alleles1.iter().map(|(&k, &v)| (k, v)).collect();
 
                 // Define genetic position
                 let gd = match &gdistkey {
@@ -952,6 +950,10 @@ pub fn readthrough_xcf(
                     if alleles1.is_empty() {
                         miss_gt1 += 1;
                     };
+                    None
+                } else if alleles1.len() == 1 || alleles1.values().min().copied()? == 1 {
+                    skipped += 1;
+                    monom_gt1 += 1;
                     None
                 } else {
                     pass += 1;
@@ -996,10 +998,7 @@ pub fn readthrough_xcf(
                 }
 
                 // Union both sets
-                let all_alleles: Counter<u32> = alleles1
-                    .iter()
-                    .map(|(&k, &v)| (k, v))
-                    .collect();
+                let all_alleles: Counter<u32> = alleles1.iter().map(|(&k, &v)| (k, v)).collect();
 
                 // Define genetic position
                 let gd = match &gdistkey {
@@ -1023,6 +1022,10 @@ pub fn readthrough_xcf(
                     if alleles1.is_empty() {
                         miss_gt1 += 1;
                     };
+                    None
+                } else if alleles1.len() == 1 || alleles1.values().min().copied()? == 1 {
+                    skipped += 1;
+                    monom_gt1 += 1;
                     None
                 } else {
                     pass += 1;
