@@ -6,15 +6,6 @@ use xpclrs::{
     methods::xpclr,
 };
 
-/*
- --format FORMAT, -F FORMAT
-                       input expected. One of "vcf" (default), "hdf5", "zarr" or "txt"
- --map MAP             If using XPCLR-style text format. Input map file as per XPCLR specs (tab separated)
- --popA POPA           If using XPCLR-style text format. Filepath to population A genotypes (space separated)
- --popB POPB           If using XPCLR-style text format. Filepath to population B genotypes (space separated)
- --verbose VERBOSE, -V VERBOSE
-                       How verbose to be in logging. 10=DEBUG, 20=INFO, 30=WARN, 40=ERROR, 50=CRITICAL
-*/
 
 fn main() {
     let version = env!("CARGO_PKG_VERSION");
