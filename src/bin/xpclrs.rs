@@ -257,7 +257,7 @@ fn main() {
         process_plink(
             input_path,
             &samples_a,
-            &samples_b,
+            Some(&samples_b),
             &chrom,
             start,
             end,
@@ -267,7 +267,7 @@ fn main() {
         process_xcf(
             input_path,
             &samples_a,
-            &samples_b,
+            Some(&samples_b),
             &chrom,
             start,
             end,

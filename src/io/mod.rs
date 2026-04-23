@@ -2,8 +2,8 @@
 This module provides the shared I/O functions (e.g. VCF/BCF readers, text readers etc).
 */
 use crate::methods::XPCLRResult;
-use crate::plink::read_plink_files;
-use crate::xcf::{indexed_xcf, readthrough_xcf};
+use crate::plink::{read_plink_files, read_plink_files_pair};
+use crate::xcf::{indexed_xcf, readthrough_xcf, indexed_xcf_pair, readthrough_xcf_pair};
 use anyhow::Result;
 use flate2::write;
 use flate2::Compression;
@@ -24,7 +24,7 @@ pub struct GenoData {
     // Per-site, per-sample alternate allele counts encoded as i8:
     // -9 = missing, 0/1/2 = alt allele count for diploids
     pub gt1: Vec<Vec<i8>>,
-    pub gt2: Vec<Vec<i8>>,
+    pub gt2: Option<Vec<Vec<i8>>>,
     pub gdistances: Vec<f64>,
 }
 
@@ -145,7 +145,7 @@ pub fn get_gt_index(full_list: &Vec<&[u8]>, subset: &[String]) -> Result<Vec<usi
 pub fn process_xcf(
     xcf_fn: String,
     s1: &[String],
-    s2: &[String],
+    s2: Option<&[String]>,
     chrom: &str,
     start: Option<u64>,
     end: Option<u64>,
@@ -157,20 +157,40 @@ pub fn process_xcf(
     let tbi_path = format!("{xcf_fn}.tbi");
     let csi_path = format!("{xcf_fn}.csi");
     let has_index = Path::exists(Path::new(&tbi_path)) || Path::exists(Path::new(&csi_path));
-    let g_data = match has_index {
-        true => indexed_xcf(
+    let g_data = match (has_index, s2.is_some()) {
+        // XCF is indexed and we want XPCLR
+        (true, true) => indexed_xcf_pair(
             xcf_fn,
             s1,
-            s2,
+            s2.unwrap(),
             chrom,
             start,
             end,
             (phased, rrate, gdistkey, n_threads),
         ),
-        false => readthrough_xcf(
+        // XCF is indexed and we want CLR
+        (true, false) => indexed_xcf(
             xcf_fn,
             s1,
-            s2,
+            chrom,
+            start,
+            end,
+            (phased, rrate, gdistkey, n_threads),
+        ),
+        // XCF is not indexed and we want XPCLR
+        (false, true) => readthrough_xcf_pair(
+            xcf_fn,
+            s1,
+            s2.unwrap(),
+            chrom,
+            start,
+            end,
+            (phased, rrate, gdistkey, n_threads),
+        ),
+        // XCF is not indexed and we want CLR
+        (false, false) => readthrough_xcf(
+            xcf_fn,
+            s1,
             chrom,
             start,
             end,
@@ -191,7 +211,7 @@ pub fn process_xcf(
 pub fn process_plink(
     plink_root: String,
     s1: &[String],
-    s2: &[String],
+    s2: Option<&[String]>,
     chrom: &str,
     start: Option<u64>,
     end: Option<u64>,
@@ -200,8 +220,11 @@ pub fn process_plink(
     // Process the data depending on the presence of the index
     let start = start.unwrap_or(0);
     // Prepare the input VCF
-    let g_data = read_plink_files(&plink_root, s1, s2, chrom, start, end, (phased, rrate))
-        .expect("Failed to parse the BED/BIM/FAM file");
+    let g_data = match s2 {
+        Some(popfile) => read_plink_files_pair(&plink_root, s1, popfile, chrom, start, end, (phased, rrate)),
+        None => read_plink_files(&plink_root, s1, chrom, start, end, (phased, rrate)),
+    }
+    .expect("Failed to parse the BED/BIM/FAM file");
     Ok(g_data)
 }
 

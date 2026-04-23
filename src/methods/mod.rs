@@ -13,14 +13,15 @@ use statrs::distribution::{Binomial, Discrete};
 use std::f64::consts::PI;
 
 // Define data type to return the A1/A2 counts and frequencies
-type AlleleDataTuple = (Vec<u64>, Vec<u64>, Vec<f64>, Vec<f64>);
+type AlleleDataTuple = (Vec<u64>, Vec<u64>, Vec<f64>);
+type PairAlleleDataTuple = (Vec<u64>, Vec<u64>, Vec<f64>, Vec<f64>);
 type RangeTuple<'a> = (Vec<&'a Vec<i8>>, Vec<f64>, Vec<u64>, Vec<u64>, Vec<f64>);
 
 struct AlleleFreqs {
     pub total_counts1: Vec<u64>,
     pub alt_counts1: Vec<u64>,
     pub alt_freqs1: Vec<f64>,
-    pub alt_freqs2: Vec<f64>,
+    pub alt_freqs2: Option<Vec<f64>>,
 }
 
 /// Create a bisector over an ordered slice.
@@ -472,6 +473,40 @@ fn get_window(
 }
 
 // Compute A1/A2 counts and A2 frequency from compact i8 dosages (-9 missing, 0/1/2 alt counts)
+fn gt_to_af(
+    gt1_m: &[Vec<i8>],
+    phased: Option<bool>,
+) -> Result<AlleleFreqs> {
+    let vals: Vec<(u64, u64, f64)> = gt1_m
+        .iter()
+        .map(|gts1| {
+            let non_missing1 = gts1.iter().filter(|v| **v >= 0).count() as u64;
+            let tot_counts1 = 2 * non_missing1; // diploid dosages for pop1
+            let is_phased = phased.unwrap_or(false);
+            let alt_counts1 = gts1
+                .iter()
+                .filter(|v| **v >= 0)
+                .map(|&v| v as u64)
+                .sum::<u64>() as f64;
+            (
+                tot_counts1,
+                alt_counts1 as u64,
+                alt_counts1 / (tot_counts1 as f64),
+            )
+        })
+        .collect();
+
+    let (total_counts1, alt_counts1, alt_freqs1): AlleleDataTuple =
+        Itertools::multiunzip(vals.into_iter());
+    Ok(AlleleFreqs {
+        total_counts1,
+        alt_counts1,
+        alt_freqs1,
+        alt_freqs2: None,
+    })
+}
+
+// Compute A1/A2 counts and A2 frequency from compact i8 dosages (-9 missing, 0/1/2 alt counts)
 fn pair_gt_to_af(
     gt1_m: &[Vec<i8>],
     gt2_m: &[Vec<i8>],
@@ -518,13 +553,13 @@ fn pair_gt_to_af(
         })
         .collect();
 
-    let (total_counts1, alt_counts1, alt_freqs1, alt_freqs2): AlleleDataTuple =
+    let (total_counts1, alt_counts1, alt_freqs1, alt_freqs2): PairAlleleDataTuple =
         Itertools::multiunzip(vals.into_iter());
     Ok(AlleleFreqs {
         total_counts1,
         alt_counts1,
         alt_freqs1,
-        alt_freqs2,
+        alt_freqs2: Some(alt_freqs2),
     })
 }
 
@@ -679,12 +714,188 @@ pub fn xpclr(
     ];
 
     let ldcutoff = ldcutoff.unwrap_or(0.95f64);
-
+    let gt2 = g_data.gt2.unwrap();
     // Get the allele frequencies first
     // (ar, t1, a1, q1, _t2, _a2, q2)
     // (total_counts1, alt_counts1, alt_freqs1, alt_freqs2)
-    let af_data: AlleleFreqs = pair_gt_to_af(&g_data.gt1, &g_data.gt2, phased)
-        .expect("Failed to copmute the AF for pop 1");
+    let af_data: AlleleFreqs = pair_gt_to_af(&g_data.gt1, &gt2, phased)
+        .expect("Failed to compute the AF for pop 1");
+
+    // Extract AF2
+    let alt_freqs2 = match af_data.alt_freqs2 {
+        Some(v) => v,
+        None => {
+            eprintln!("Failed to compute the AF for pop 2");
+            std::process::exit(1);
+        }
+    };
+
+    // Then, let's compute the omega
+    let w = est_omega(&af_data.alt_freqs1, &alt_freqs2).expect("Cannot compute omega");
+    log::info!("Omega: {w}");
+
+    // Process each window
+    let mut results: Vec<(usize, XPCLRResult)> = windows
+        // Parallellize by window
+        .par_iter()
+        .enumerate()
+        .map(|(n, (start, stop))| {
+            let (ix, n_avail) = get_window(&g_data.positions, *start, *stop, maxsnps).expect("Cannot find the window");
+            let n_snps = ix.len();
+            let max_ix = ix.iter().last().unwrap_or(&0_usize).to_owned();
+            log::debug!("xpclr Window idx: {n}; Window BP interval: {start}-{stop}; N SNPs selected: {n_snps}; N SNP available: {n_avail}");
+            if n_snps < minsnps {
+                let xpclr_win_res = XPCLRResult{
+                    window: (*start, *stop, *start, *stop, n_snps, n_avail),
+                    ll_sel: f64::NAN,
+                    ll_neut: f64::NAN,
+                    sel_coeff: f64::NAN,
+                    xpclr: f64::NAN,
+                };
+                (n, xpclr_win_res)
+            } else {
+                let bpi = g_data.positions[ix[0]] + 1;
+                let bpe = g_data.positions[max_ix] + 1;
+                // Do not clone, just refer to them (gt2 holds haplotypes when phased, dosages otherwise)
+                let (gt_range, gd_range, a1_range, t1_range, p2freqs): RangeTuple =
+                    Itertools::multiunzip(ix.iter().map(|&i| (&gt2[i], &g_data.gdistances[i], &af_data.alt_counts1[i], &af_data.total_counts1[i], &alt_freqs2[i])));
+                // Compute distances from the average gen. dist.
+                let mdist = mean(&gd_range);
+                let rds = gd_range.iter().map(|d| (d - mdist).abs()).collect::<Vec<f64>>();
+
+                // Compute the weights
+                let weights = compute_weights(gt_range, ldcutoff).expect("Failed to compute the weights");
+                let omegas = vec![w; rds.len()];
+                // Compute XP-CLR
+                log::debug!("P2freqs {start} {stop} {} {p2freqs:?}", p2freqs.len());
+                let xpclr_res = compute_xpclr(
+                    (&a1_range, &t1_range),
+                    &rds,
+                    &p2freqs,
+                    &weights,
+                    &omegas,
+                    &sel_coeffs,
+                    fast
+                ).expect("Failed computing XP-CLR for window");
+                let xpclr_v = 2.0_f64 * (xpclr_res.0 - xpclr_res.1);
+                let xpclr_win_res = XPCLRResult{
+                    window: (*start, *stop, bpi, bpe, n_snps, n_avail),
+                    ll_sel: xpclr_res.0,
+                    ll_neut: xpclr_res.1,
+                    sel_coeff: xpclr_res.2,
+                    xpclr: xpclr_v,
+                };
+                (n, xpclr_win_res)
+            }
+        })
+        .collect();
+    results.sort_by_key(|item| item.0);
+    Ok(results)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn approx_eq(a: f64, b: f64, tol: f64) -> bool {
+        (a - b).abs() <= tol
+    }
+
+    #[test]
+    fn bisector_basic_indices() {
+        let data = vec![1, 2, 2, 3, 5];
+        let b = Bisector::new(&data);
+        assert_eq!(b.bisect_left(&2), 1);
+        assert_eq!(b.bisect_right(&2), 3);
+        assert_eq!(b.bisect_left(&4), 4);
+        assert_eq!(b.bisect_right(&0), 0);
+    }
+
+    #[test]
+    fn partial_bisector_with_floats() {
+        let data = vec![0.1_f64, 0.2, 0.2, 0.5];
+        let b = PartialBisector::new(&data);
+        assert_eq!(b.bisect_left(&0.2), 1);
+        assert_eq!(b.bisect_right(&0.2), 3);
+        assert_eq!(b.bisect_left(&0.3), 3);
+        assert_eq!(b.bisect_right(&0.3), 3);
+    }
+
+    #[test]
+    fn omega_estimation_matches_formula() {
+        let q1 = vec![0.2_f64, 0.3];
+        let q2 = vec![0.4_f64, 0.5];
+        let expected = mean(
+            &q1.iter()
+                .zip(&q2)
+                .map(|(p, q)| ((p - q).powi(2)) / (q * (1.0_f64 - q)))
+                .collect::<Vec<f64>>(),
+        );
+        let w = est_omega(&q1, &q2).expect("omega");
+        assert!(approx_eq(w, expected, 1e-12));
+    }
+
+    #[test]
+    fn variance_estimate_simple() {
+        let w = 2.0_f64;
+        let q2 = 0.25_f64;
+        let v = var_estimate(w, q2).expect("variance");
+        assert!(approx_eq(v, 0.375_f64, 1e-12));
+    }
+
+    #[test]
+    fn compute_c_bounds_and_rounding() {
+        let c0 = compute_c(0.01, 0.0, Some(20000), Some(1e-7), Some(5)).expect("compute_c");
+        assert!(approx_eq(c0, 1.0_f64, 1e-12));
+
+        let c = compute_c(0.01, 0.1, Some(20000), Some(1e-7), Some(5)).expect("compute_c");
+        assert!((0.0_f64..=1.0_f64).contains(&c));
+        let x = -((2.0_f64 * 20000.0_f64).ln()) * (0.01_f64.max(1e-7)) / 0.1;
+        let expected = round_to(1.0 - x.exp(), 5);
+        assert!(approx_eq(c, expected, 1e-12));
+    }
+
+    #[test]
+    fn pdf_scalar_interval_behavior() {
+        let dens_left = pdf_scalar(0.05, 0.1, 0.4, 0.02);
+        let dens_mid = pdf_scalar(0.5, 0.1, 0.4, 0.02);
+        let dens_right = pdf_scalar(0.95, 0.1, 0.4, 0.02);
+        assert!(dens_left > 0.0_f64);
+        assert!(dens_right > 0.0_f64);
+        assert!(approx_eq(dens_mid, 0.0_f64, 1e-12));
+    }
+}
+
+// Main CLR caller
+/// Compute CLR scores for the provided windows.
+///
+/// # Examples
+///
+/// ```ignore
+/// // See README for constructing GenoData and window definitions.
+/// let results = xpclrs::methods::clr(g_data, windows, None, 200, 10, None, None).unwrap();
+/// ```
+pub fn clr(
+    g_data: GenoData,
+    windows: Vec<(usize, usize)>, // Windows
+    ldcutoff: Option<f64>,
+    maxsnps: usize,
+    minsnps: usize, // Size/count filters
+    phased: Option<bool>,
+    fast: Option<bool>,
+) -> Result<Vec<(usize, XPCLRResult)>> {
+    let sel_coeffs = vec![
+        0.0, 0.00001, 0.00005, 0.0001, 0.0002, 0.0004, 0.0006, 0.0008, 0.001, 0.003, 0.005, 0.01,
+        0.05, 0.08, 0.1, 0.15,
+    ];
+
+    let ldcutoff = ldcutoff.unwrap_or(0.95f64);
+    let gt1 = g_data.gt1;
+    // Get the allele frequencies first
+    // (ar, t1, a1, q1, _t2, _a2, q2)
+    // (total_counts1, alt_counts1, alt_freqs1, alt_freqs2)
+    let af_data: AlleleFreqs = gt_to_af(&g_data.gt1, phased)
+        .expect("Failed to compute the AF for pop 1");
 
     // Then, let's compute the omega
     let w = est_omega(&af_data.alt_freqs1, &af_data.alt_freqs2).expect("Cannot compute omega");
@@ -714,7 +925,7 @@ pub fn xpclr(
                 let bpe = g_data.positions[max_ix] + 1;
                 // Do not clone, just refer to them (gt2 holds haplotypes when phased, dosages otherwise)
                 let (gt_range, gd_range, a1_range, t1_range, p2freqs): RangeTuple =
-                    Itertools::multiunzip(ix.iter().map(|&i| (&g_data.gt2[i], &g_data.gdistances[i], &af_data.alt_counts1[i], &af_data.total_counts1[i], &af_data.alt_freqs2[i])));
+                    Itertools::multiunzip(ix.iter().map(|&i| (&gt2[i], &g_data.gdistances[i], &af_data.alt_counts1[i], &af_data.total_counts1[i], &af_data.alt_freqs2[i])));
                 // Compute distances from the average gen. dist.
                 let mdist = mean(&gd_range);
                 let rds = gd_range.iter().map(|d| (d - mdist).abs()).collect::<Vec<f64>>();
