@@ -929,8 +929,8 @@ pub fn clr(
                 // Return results
                 let xpclr_win_res = XPCLRResult{
                     window: (*start, *stop, bpi, bpe, n_snps, n_avail),
-                    ll_sel: lh1, // Not computed for CLR
-                    ll_neut: lh0, // Not computed for CLR
+                    ll_sel: lh1,
+                    ll_neut: lh0,
                     sel_coeff: f64::NAN, // Not computed for CLR
                     xpclr: clr,
                 };
