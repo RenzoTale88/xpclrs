@@ -15,7 +15,6 @@ use std::f64::consts::PI;
 // Define data type to return the A1/A2 counts and frequencies
 type AlleleDataTuple = (Vec<u64>, Vec<u64>, Vec<f64>);
 type PairAlleleDataTuple = (Vec<u64>, Vec<u64>, Vec<f64>, Vec<f64>);
-type CountTuple = (Vec<u64>, Vec<u64>, Vec<f64>);
 type RangeTuple<'a> = (Vec<&'a Vec<i8>>, Vec<f64>, Vec<u64>, Vec<u64>, Vec<f64>);
 
 struct AlleleFreqs {
@@ -804,6 +803,53 @@ pub fn xpclr(
     Ok(results)
 }
 
+// Log likelihood function
+/// Compute LL for the provided windows.
+///
+/// # Examples
+///
+/// ```ignore
+/// // See README for constructing GenoData and window definitions.
+/// let lh = xpclrs::methods::log_likelihood(window_counts, p_neutral).unwrap();
+/// ```
+fn log_likelihood(counts: &[u64], p_neutral: &[f64]) -> Result<f64> {
+    let ll: f64 = counts
+        .iter()
+        .map(|&a| {
+            p_neutral[a as usize - 1].ln()
+        })
+        .sum();
+    Ok(ll)
+}
+
+// Histogram to probabilities function
+/// Convert a histogram to a vector of probabilities.
+///
+/// # Examples
+///
+/// ```ignore
+/// // See README for constructing GenoData and window definitions.
+/// let probs = xpclrs::methods::hist_to_probs(hist, Some(1e-10)).unwrap();
+/// ```
+fn hist_to_probs(hist: &[usize], epsilon: Option<f64>) -> Result<Vec<f64>> {
+    let epsilon = epsilon.unwrap_or(1e-10); // small value to avoid zero probabilities
+    let sfs_sum_global = hist.iter().sum::<usize>();
+    Ok(hist
+        .iter()
+        .map(|&k| {
+            if k == 0_usize {
+                epsilon
+            } else if k == sfs_sum_global {
+                1.0_f64 - epsilon
+            } else {
+                (k as f64) / (sfs_sum_global as f64)
+            }
+        })
+        .collect()
+    )
+}
+
+
 // Main CLR caller
 /// Compute CLR scores for the provided windows.
 ///
@@ -826,10 +872,15 @@ pub fn clr(
     // (total_counts1, alt_counts1, alt_freqs1, alt_freqs2)
     let af_data: AlleleFreqs = gt_to_af(&gt1, phased).expect("Failed to compute the AF for pop 1");
 
-    // Total number of alternative alleles
-    let tot_n = af_data.total_counts1.iter().sum::<u64>() as f64;
-    let alt_n = af_data.alt_counts1.iter().sum::<u64>() as f64;
-    let tot_p = alt_n / tot_n;
+    // Build histogram of frequencies
+    let max_c = gt1[0].len() * 2_usize; // max count per site (2 for diploid dosages, 1 for haplotypes)
+    let mut hist = vec![0_usize; max_c];
+    for &alt_count in &af_data.alt_counts1 {
+        hist[(alt_count - 1) as usize] += 1;
+    }
+
+    // Define neutral probabilities
+    let neutral_probs: Vec<f64> = hist_to_probs(&hist, Some(1e-10)).expect("Cannot compute the neutral probabilities");
 
     // Process each window
     let mut results: Vec<(usize, XPCLRResult)> = windows
@@ -854,30 +905,32 @@ pub fn clr(
                 let bpi = g_data.positions[ix[0]] + 1;
                 let bpe = g_data.positions[max_ix] + 1;
                 // Do not clone, just refer to them (gt2 holds haplotypes when phased, dosages otherwise)
-                let (a1_range, t1_range, p1freqs): CountTuple =
-                    Itertools::multiunzip(ix.iter().map(|&i| (&af_data.alt_counts1[i], &af_data.total_counts1[i], &af_data.alt_freqs1[i])));
+                let a1_range  =
+                    ix.iter().map(|&i| af_data.alt_counts1[i]).collect::<Vec<u64>>();
 
-                // Compute p
-                let win_alt_n = a1_range.iter().sum::<u64>() as f64;
-                let win_tot_n = t1_range.iter().sum::<u64>() as f64;
-                let win_p = win_alt_n / win_tot_n;
+                // Define neutral lh
+                let lh0 = log_likelihood(&a1_range, &neutral_probs).expect("Cannot compute the neutral likelihood");
+
+                // Local histogram
+                let mut local_hist = vec![0_usize; max_c];
+                for &alt_count in &a1_range {
+                    local_hist[(alt_count - 1) as usize] += 1;
+                }
+
+                // Local probabilities
+                let local_probs: Vec<f64> = hist_to_probs(&local_hist, Some(1e-10)).expect("Cannot compute the local probabilities");
+                
+                // Local lh
+                let lh1 = log_likelihood(&a1_range, &local_probs).expect("Cannot compute the local likelihood");
 
                 // Compute CLR
-                log::debug!("P1freqs {start} {stop} {} {p1freqs:?}", p1freqs.len());
-                let clr = t1_range
-                    .iter()
-                    .zip(a1_range.iter())
-                    .map(|(t1, a1)| {
-                        let t1 = *t1 as f64;
-                        let a1 = *a1 as f64;
-                        a1 * (win_p / tot_p).log10() + (t1 - a1) * ((1.0 - win_p) / (1.0 - tot_p)).log10()
-                    })
-                    .sum::<f64>() * 2.0_f64; // log-likelihood ratio multiplied by 2 for chi-squared distribution
+                let clr = 2.0_f64 * (lh1 - lh0);
 
+                // Return results
                 let xpclr_win_res = XPCLRResult{
                     window: (*start, *stop, bpi, bpe, n_snps, n_avail),
-                    ll_sel: f64::NAN, // Not computed for CLR
-                    ll_neut: f64::NAN, // Not computed for CLR
+                    ll_sel: lh1, // Not computed for CLR
+                    ll_neut: lh0, // Not computed for CLR
                     sel_coeff: f64::NAN, // Not computed for CLR
                     xpclr: clr,
                 };
