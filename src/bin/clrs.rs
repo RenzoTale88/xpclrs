@@ -278,7 +278,7 @@ fn main() {
         // Write output
         log::info!("Writing output file to {out_path}...");
         let mut clr_tsv = write_table(&format!("{out_path}.{chrom}.clr"));
-        let _ = to_table(&chrom, &clr_res, &mut clr_tsv, &out_fmt);
+        let _ = to_table(&chrom, &clr_res, &mut clr_tsv, &out_fmt, false);
     });
 
     log::info!("CLR computation completed.")

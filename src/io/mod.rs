@@ -272,6 +272,7 @@ pub fn to_table(
     xpclr_res: &[(usize, XPCLRResult)],
     xpclr_tsv: &mut Box<dyn std::io::Write>,
     outfmt: &str,
+    xp: bool,
 ) -> Result<()> {
     let delim = match outfmt {
         "tsv" => "\t",
@@ -279,6 +280,7 @@ pub fn to_table(
         "csv" => ",",
         _ => "\t",
     };
+    let xp = if xp { "XP-CLR" } else { "CLR" };
     // Write header
     writeln!(xpclr_tsv, "chrom{delim}start{delim}stop{delim}pos_start{delim}pos_stop{delim}modelL{delim}nullL{delim}sel_coef{delim}nSNPs{delim}nSNPs_avail{delim}xpclr{delim}xpclr_norm")?;
 
@@ -296,7 +298,7 @@ pub fn to_table(
     let mean_xpclr = mean(&xpclr_values);
     let std_xpclr = population_standard_deviation(&xpclr_values, None);
     log::info!(
-        "XP-CLR mean +/- st.d: {mean_xpclr} +/- {std_xpclr} (N={})",
+        "{xp} mean +/- st.d: {mean_xpclr} +/- {std_xpclr} (N={})",
         xpclr_values.len()
     );
 
