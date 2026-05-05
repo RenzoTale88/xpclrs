@@ -9,7 +9,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 * Add `clrs` to compute composite likelihood ratio 
 
 ## [1.0.2] - 2026-XX-XX
-* Add paper to the repository
 * Tweak GitHub actions
 * Refine documentation of the software
 
