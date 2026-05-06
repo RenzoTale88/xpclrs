@@ -460,7 +460,7 @@ fn get_window(
         // The window has too many sites; randomly select some
         let mut ix: Vec<usize> = (start_ix..stop_ix)
             .collect::<Vec<usize>>()
-            .choose_multiple(&mut rand::rng(), max_pos_size)
+            .sample(&mut rand::rng(), max_pos_size)
             .cloned()
             .collect::<Vec<usize>>();
         ix.sort();
