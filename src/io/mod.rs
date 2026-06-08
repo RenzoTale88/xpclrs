@@ -280,9 +280,10 @@ pub fn to_table(
         "csv" => ",",
         _ => "\t",
     };
+    let stat_prefix = if xp { "xp" } else { "" };
     let xp = if xp { "XP-CLR" } else { "CLR" };
     // Write header
-    writeln!(xpclr_tsv, "chrom{delim}start{delim}stop{delim}pos_start{delim}pos_stop{delim}modelL{delim}nullL{delim}sel_coef{delim}nSNPs{delim}nSNPs_avail{delim}xpclr{delim}xpclr_norm")?;
+    writeln!(xpclr_tsv, "chrom{delim}start{delim}stop{delim}pos_start{delim}pos_stop{delim}modelL{delim}nullL{delim}sel_coef{delim}nSNPs{delim}nSNPs_avail{delim}{stat_prefix}clr{delim}{stat_prefix}clr_norm")?;
 
     // Compute normalizing factors
     let xpclr_values = xpclr_res
