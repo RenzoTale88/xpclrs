@@ -19,7 +19,7 @@ jobs:
         run: sudo apt-get update && sudo apt-get install libopenblas-dev
 
       - name: Build
-        run: cargo login --token ${{ secrets.CARGO_REGISTRY_TOKEN }}
+        run: echo "${{ secrets.CARGO_REGISTRY_TOKEN }}" | cargo login
 
       - name: Build
         run: cargo publish --dry-run

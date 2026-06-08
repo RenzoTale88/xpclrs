@@ -8,7 +8,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [1.1.0] - 2026-YY-YY
 * Add `clrs` to compute composite likelihood ratio 
 
-## [1.0.2] - 2026-XX-XX
+## [1.0.3] - 2026-05-06
+* Tweak GitHub actions
+* Update crates:
+    * rand == 0.10.1
+    * rust-htslib == 1.0.0
+    * scirs-integrate == 0.4.3
+
+## [1.0.2] - 2026-05-05
 * Tweak GitHub actions
 * Refine documentation of the software
 
