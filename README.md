@@ -98,6 +98,20 @@ xpclrs --input test/plink --plink --out test --samplesA test/samplesA_plink.txt 
 Finally, the software provides a `--fast` option, that disable the adaptive integration and provides approximate results. This speeds up the software significantly, but results may vary when compared with the original implementation.
 
 
+## Combining across chromosomes
+`xpclrs` comes with the combine utility, that allows you to combine and normalize across multiple chromosomes easily.
+Simply place all your output in a folder, and run the command:
+```
+combine_xpclrs -I INPUTS/ -O combined_results.xpclrs
+```
+
+You can also provide the type of files using `-f` for the input and `-F` for the outputs; for example:
+```
+combine_xpclrs -I INPUTS/ -O combined_results.xpclrs -f csv -F tsv
+```
+Will take all the inputs as csv files, and save the output as a tsv instead.
+
+
 ### Demo data
 The tool comes with a demo data generated from the [1000GP dataset](https://ftp.1000genomes.ebi.ac.uk/vol1/ftp/release/20130502/). 
 It is also possible to test the tool using the demo data in the [original xpclr repository](https://github.com/hardingnj/xpclr/tree/master/fixture).

@@ -2,19 +2,10 @@ use clap::{builder::PossibleValue, value_parser, Arg, ArgAction, Command};
 use env_logger::{self, Env};
 use rayon::current_num_threads;
 use xpclrs::{
-    io::{process_plink, process_xcf, read_file, to_table, write_table},
+    io::{process_plink, process_xcf, read_file, to_table, table_writer},
     methods::xpclr,
 };
 
-/*
- --format FORMAT, -F FORMAT
-                       input expected. One of "vcf" (default), "hdf5", "zarr" or "txt"
- --map MAP             If using XPCLR-style text format. Input map file as per XPCLR specs (tab separated)
- --popA POPA           If using XPCLR-style text format. Filepath to population A genotypes (space separated)
- --popB POPB           If using XPCLR-style text format. Filepath to population B genotypes (space separated)
- --verbose VERBOSE, -V VERBOSE
-                       How verbose to be in logging. 10=DEBUG, 20=INFO, 30=WARN, 40=ERROR, 50=CRITICAL
-*/
 
 fn main() {
     let version = env!("CARGO_PKG_VERSION");
@@ -257,7 +248,7 @@ fn main() {
         process_plink(
             input_path,
             &samples_a,
-            &samples_b,
+            Some(&samples_b),
             &chrom,
             start,
             end,
@@ -267,13 +258,14 @@ fn main() {
         process_xcf(
             input_path,
             &samples_a,
-            &samples_b,
+            Some(&samples_b),
             &chrom,
             start,
             end,
             (phased, rrate, distkey, n_threads),
         )
-    }.expect("Failed loading genotype data");
+    }
+    .expect("Failed loading genotype data");
 
     // Establish the windows
     let end = match end {
@@ -321,13 +313,13 @@ fn main() {
             maxsnps as usize,
             minsnps as usize,
             phased,
-            fast
+            fast,
         )
         .expect("Failed running the XP-CLR function");
         // Write output
         log::info!("Writing output file to {out_path}...");
-        let mut xpclr_tsv = write_table(&format!("{out_path}.{chrom}.xpclr"));
-        let _ = to_table(&chrom, &xpclr_res, &mut xpclr_tsv, &out_fmt);
+        let mut xpclr_tsv = table_writer(&format!("{out_path}.{chrom}.xpclr"));
+        let _ = to_table(&chrom, &xpclr_res, &mut xpclr_tsv, &out_fmt, true);
     });
 
     log::info!("XPCLR computation completed.")

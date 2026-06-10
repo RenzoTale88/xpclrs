@@ -115,7 +115,7 @@ fn bed_ind_major(
 /// ```ignore
 /// let data = xpclrs::plink::read_plink_files("data/plink", &s1, &s2, "1", 0, None, (None, None)).unwrap();
 /// ```
-pub fn read_plink_files(
+pub fn read_plink_files_pair(
     prefix: &str,
     s1: &[String],
     s2: &[String],
@@ -346,7 +346,214 @@ pub fn read_plink_files(
     Ok(GenoData {
         positions,
         gt1: gt1_data,
-        gt2: gt2_data,
+        gt2: Some(gt2_data),
+        gdistances: gd_data,
+    })
+}
+
+pub fn read_plink_files(
+    prefix: &str,
+    s1: &[String],
+    chrom: &str,
+    start: u64,
+    end: Option<u64>,
+    (phased, rrate): (Option<bool>, Option<f64>),
+) -> io::Result<GenoData> {
+    // Read .fam file to get number of samples and IDs
+    let phased = phased.unwrap_or(false);
+    if phased {
+        log::warn!("Phased data requested, but PLINK input is always unphased. Proceeding with unphased data.");
+    }
+    let fam_path = format!("{}.fam", prefix);
+    let fam_file = File::open(&fam_path)?;
+    let fam_reader = BufReader::new(fam_file);
+    let sample_ids_owned: Vec<Vec<u8>> = fam_reader
+        .lines()
+        .map(|line| line.expect("Cannot read line"))
+        .filter_map(|line| {
+            let fields = line.split_whitespace().collect::<Vec<&str>>();
+            if fields.len() >= 2 {
+                Some(fields[0..2].join("_").into_bytes())
+            } else {
+                None
+            }
+        })
+        .collect();
+    let sample_ids: Vec<&[u8]> = sample_ids_owned.iter().map(|id| id.as_slice()).collect();
+    // Load sample lists as an u8 array
+    let s1 = consolidate_list(&sample_ids, s1).expect("Failed to subset sampleA");
+    // Fetch the indices of each sample in each list
+    let mut individuals_ixs =
+        get_gt_index(&sample_ids, &s1).expect("Failed to get indeces of sampleA");
+    individuals_ixs.sort();
+    individuals_ixs.dedup();
+    let new_indexes = individuals_ixs
+        .iter()
+        .enumerate()
+        .map(|(e, v)| (*v, e))
+        .collect::<FxHashMap<usize, usize>>();
+    // Create new group indexes
+    let i1 = individuals_ixs
+        .iter()
+        .map(|&idx| new_indexes.get(&idx).expect("Missing index"))
+        .copied()
+        .collect::<Vec<usize>>();
+    // Generate a vector of retained samples
+    let kept_samples: Vec<bool> = sample_ids
+        .iter()
+        .enumerate()
+        .map(|(idx, _)| individuals_ixs.contains(&idx))
+        .collect();
+
+    // Print number of samples
+    log::info!("Samples: {}", i1.len());
+    log::debug!("Old samples indexes: {:?}", individuals_ixs);
+    log::debug!("New samples indexes: {:?}", i1);
+
+    // Dies if no samples are retained
+    if s1.is_empty() {
+        eprintln!("No samples found in the list.");
+        std::process::exit(1);
+    }
+
+    // Read .bim file to get number of SNPs and IDs
+    let bim_path = format!("{}.bim", prefix);
+    let bim_file = File::open(&bim_path)?;
+    let bim_reader = BufReader::new(bim_file);
+    let mut n_snps: usize = 0;
+    let mut positions: Vec<usize> = vec![];
+    let mut gd_data: Vec<f64> = vec![];
+    let mut keep_vec: Vec<bool> = vec![];
+    for line in bim_reader.lines() {
+        n_snps += 1;
+        let line = line?;
+        let fields: Vec<&str> = line.split_whitespace().collect();
+        if chrom == fields[0] {
+            let pos: u64 = fields[3].parse().unwrap();
+            if pos >= start && (end.is_none() || pos <= end.unwrap()) {
+                positions.push(fields[3].parse::<usize>().unwrap());
+                // Add genetic distance in the bim file, if provided, otherwise compute it
+                // based on the recombination rate and physical position
+                let gd = match fields[2].parse::<f64>() {
+                    Ok(v) => {
+                        if v != 0.0 {
+                            v
+                        } else {
+                            pos as f64 * rrate.unwrap_or(1e-8)
+                        }
+                    }
+                    Err(_) => pos as f64 * rrate.unwrap_or(1e-8),
+                };
+                gd_data.push(gd);
+                keep_vec.push(true);
+            } else {
+                keep_vec.push(false);
+            }
+        } else {
+            keep_vec.push(false);
+        }
+    }
+    log::info!("Number of SNPs: {}", n_snps);
+
+    // Read .bed file
+    let bed_path = format!("{}.bed", prefix);
+    let mut bed_file = File::open(&bed_path)?;
+
+    // Check magic numbers
+    let mut magic = [0u8; 3];
+    bed_file.read_exact(&mut magic)?;
+    if magic != [0x6c, 0x1b, 0x01] && magic != [0x6c, 0x1b, 0x00] {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "Invalid BED file magic numbers",
+        ));
+    }
+
+    // Define if it is SNP major or individual major
+    let genotypes: Vec<Vec<u8>> = if magic[2] == 0x01 {
+        log::info!("Reading in SNP-major mode.");
+        bed_snp_major(&mut bed_file, &kept_samples, new_indexes, &keep_vec)
+    } else {
+        log::info!("Reading in Individual-major mode.");
+        bed_ind_major(&mut bed_file, &kept_samples, new_indexes, &keep_vec)
+    };
+
+    // Filter the dataset
+    let mut monom_gt1 = 0;
+    let mut miss_gt1 = 0;
+    let mut pass = 0;
+    let mut skipped = 0;
+    let mut tot = 0;
+    let (gt1_data, positions, gd_data): (Vec<_>, Vec<_>, Vec<_>) =
+        izip!(genotypes.iter(), positions.iter(), gd_data.iter())
+            .filter_map(|(snp, position, gd)| {
+                // Prepare GT1 and GT2
+                // Usually, 00, 10 and 11 mean 2, 1 and 0 minor allele counts respectively
+                let gt1 = i1
+                    .iter()
+                    .map(|&i| match snp[i] {
+                        0b00 => 2_i8,
+                        0b10 => 1_i8,
+                        0b11 => 0_i8,
+                        _ => -9_i8,
+                    })
+                    .collect::<Vec<i8>>();
+                // Define if all variants are missing in GT1 or GT2
+                let all_missing_g1 = gt1.iter().all(|i| *i == -9_i8);
+                // Get non-missing genotypes in GT2
+                let non_missing = gt1
+                    .iter()
+                    .filter_map(|&i| if i != -9_i8 { Some(i as i64) } else { None })
+                    .collect::<Vec<i64>>();
+                // Count how many minor alleles are present
+                let n_minor_alleles: i64 = non_missing.iter().sum();
+                let n_major_alleles: i64 = (non_missing.iter().len() as i64 * 2) - n_minor_alleles;
+                // If the minor allele count is <=1 or >=(n_samples * 2 -1),
+                // the variants are monomorphic or singleton (only 1 major or minor)
+                // alleles; discard these.
+                let monom_or_singleton_gt1 = n_minor_alleles < 1 || n_major_alleles < 1;
+                if all_missing_g1 {
+                    skipped += 1;
+                    tot += 1;
+                    miss_gt1 += if all_missing_g1 { 1 } else { 0 };
+                    None
+                } else if monom_or_singleton_gt1 {
+                    skipped += 1;
+                    tot += 1;
+                    monom_gt1 += 1;
+                    None
+                } else {
+                    pass += 1;
+                    tot += 1;
+                    Some((gt1, *position, *gd))
+                }
+            })
+            .multiunzip();
+
+    // Assess everything looks good
+    if positions.len() != gt1_data.len() {
+        panic!("Inconsistent data")
+    };
+    if positions.len() as i32 != pass {
+        panic!("Inconsistent data")
+    };
+    if tot != (pass + skipped) {
+        panic!("Inconsistent counts")
+    }
+
+    // Print some info
+    log::info!("Processed {tot} variants");
+    log::info!("Loaded {pass} variants");
+    log::info!("Skipped {skipped} variants because:");
+    log::info!(" - 0 multiallelic");
+    log::info!(" - {monom_gt1} monomorphic/singleton in pop");
+    log::info!(" - {miss_gt1} all-missing in pop");
+
+    // Return the data structure
+    Ok(GenoData {
+        positions,
+        gt1: gt1_data,
+        gt2: None,
         gdistances: gd_data,
     })
 }

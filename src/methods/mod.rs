@@ -13,14 +13,15 @@ use statrs::distribution::{Binomial, Discrete};
 use std::f64::consts::PI;
 
 // Define data type to return the A1/A2 counts and frequencies
-type AlleleDataTuple = (Vec<u64>, Vec<u64>, Vec<f64>, Vec<f64>);
+type AlleleDataTuple = (Vec<u64>, Vec<u64>, Vec<f64>);
+type PairAlleleDataTuple = (Vec<u64>, Vec<u64>, Vec<f64>, Vec<f64>);
 type RangeTuple<'a> = (Vec<&'a Vec<i8>>, Vec<f64>, Vec<u64>, Vec<u64>, Vec<f64>);
 
 struct AlleleFreqs {
     pub total_counts1: Vec<u64>,
     pub alt_counts1: Vec<u64>,
     pub alt_freqs1: Vec<f64>,
-    pub alt_freqs2: Vec<f64>,
+    pub alt_freqs2: Option<Vec<f64>>,
 }
 
 /// Create a bisector over an ordered slice.
@@ -472,6 +473,50 @@ fn get_window(
 }
 
 // Compute A1/A2 counts and A2 frequency from compact i8 dosages (-9 missing, 0/1/2 alt counts)
+fn gt_to_af(gt1_m: &[Vec<i8>], phased: Option<bool>) -> Result<AlleleFreqs> {
+    let vals: Vec<(u64, u64, f64)> = gt1_m
+        .iter()
+        .map(|gts1| {
+            let is_phased = phased.unwrap_or(false);
+            let tot_counts1 = if is_phased {
+                // haplotype vector length is 2*n_samples; total allele count is number of non-missing haplotypes
+                gts1.iter().filter(|v| **v >= 0).count() as u64
+            } else {
+                // dosage vector; total allele count = 2 * non-missing samples
+                2 * (gts1.iter().filter(|v| **v >= 0).count() as u64)
+            };
+            let alt_counts1 = if is_phased {
+                // haplotypes: entries are 0/1; sum directly
+                gts1.iter()
+                    .filter(|v| **v >= 0)
+                    .map(|&v| v as u64)
+                    .sum::<u64>() as f64
+            } else {
+                // dosages: entries are 0/1/2; sum directly
+                gts1.iter()
+                    .filter(|v| **v >= 0)
+                    .map(|&v| v as u64)
+                    .sum::<u64>() as f64
+            };
+            (
+                tot_counts1,
+                alt_counts1 as u64,
+                alt_counts1 / (tot_counts1 as f64),
+            )
+        })
+        .collect();
+
+    let (total_counts1, alt_counts1, alt_freqs1): AlleleDataTuple =
+        Itertools::multiunzip(vals.into_iter());
+    Ok(AlleleFreqs {
+        total_counts1,
+        alt_counts1,
+        alt_freqs1,
+        alt_freqs2: None,
+    })
+}
+
+// Compute A1/A2 counts and A2 frequency from compact i8 dosages (-9 missing, 0/1/2 alt counts)
 fn pair_gt_to_af(
     gt1_m: &[Vec<i8>],
     gt2_m: &[Vec<i8>],
@@ -518,13 +563,13 @@ fn pair_gt_to_af(
         })
         .collect();
 
-    let (total_counts1, alt_counts1, alt_freqs1, alt_freqs2): AlleleDataTuple =
+    let (total_counts1, alt_counts1, alt_freqs1, alt_freqs2): PairAlleleDataTuple =
         Itertools::multiunzip(vals.into_iter());
     Ok(AlleleFreqs {
         total_counts1,
         alt_counts1,
         alt_freqs1,
-        alt_freqs2,
+        alt_freqs2: Some(alt_freqs2),
     })
 }
 
@@ -679,15 +724,24 @@ pub fn xpclr(
     ];
 
     let ldcutoff = ldcutoff.unwrap_or(0.95f64);
-
+    let gt2 = g_data.gt2.unwrap();
     // Get the allele frequencies first
     // (ar, t1, a1, q1, _t2, _a2, q2)
     // (total_counts1, alt_counts1, alt_freqs1, alt_freqs2)
-    let af_data: AlleleFreqs = pair_gt_to_af(&g_data.gt1, &g_data.gt2, phased)
-        .expect("Failed to copmute the AF for pop 1");
+    let af_data: AlleleFreqs =
+        pair_gt_to_af(&g_data.gt1, &gt2, phased).expect("Failed to compute the AF for pop 1");
+
+    // Extract AF2
+    let alt_freqs2 = match af_data.alt_freqs2 {
+        Some(v) => v,
+        None => {
+            eprintln!("Failed to compute the AF for pop 2");
+            std::process::exit(1);
+        }
+    };
 
     // Then, let's compute the omega
-    let w = est_omega(&af_data.alt_freqs1, &af_data.alt_freqs2).expect("Cannot compute omega");
+    let w = est_omega(&af_data.alt_freqs1, &alt_freqs2).expect("Cannot compute omega");
     log::info!("Omega: {w}");
 
     // Process each window
@@ -714,7 +768,7 @@ pub fn xpclr(
                 let bpe = g_data.positions[max_ix] + 1;
                 // Do not clone, just refer to them (gt2 holds haplotypes when phased, dosages otherwise)
                 let (gt_range, gd_range, a1_range, t1_range, p2freqs): RangeTuple =
-                    Itertools::multiunzip(ix.iter().map(|&i| (&g_data.gt2[i], &g_data.gdistances[i], &af_data.alt_counts1[i], &af_data.total_counts1[i], &af_data.alt_freqs2[i])));
+                    Itertools::multiunzip(ix.iter().map(|&i| (&gt2[i], &g_data.gdistances[i], &af_data.alt_counts1[i], &af_data.total_counts1[i], &alt_freqs2[i])));
                 // Compute distances from the average gen. dist.
                 let mdist = mean(&gd_range);
                 let rds = gd_range.iter().map(|d| (d - mdist).abs()).collect::<Vec<f64>>();
@@ -740,6 +794,145 @@ pub fn xpclr(
                     ll_neut: xpclr_res.1,
                     sel_coeff: xpclr_res.2,
                     xpclr: xpclr_v,
+                };
+                (n, xpclr_win_res)
+            }
+        })
+        .collect();
+    results.sort_by_key(|item| item.0);
+    Ok(results)
+}
+
+// Log likelihood function
+/// Compute LL for the provided windows.
+///
+/// # Examples
+///
+/// ```ignore
+/// // See README for constructing GenoData and window definitions.
+/// let lh = xpclrs::methods::log_likelihood(window_counts, p_neutral).unwrap();
+/// ```
+fn log_likelihood(counts: &[u64], p_neutral: &[f64]) -> Result<f64> {
+    let ll: f64 = counts
+        .iter()
+        .map(|&a| {
+            p_neutral[a as usize - 1].ln()
+        })
+        .sum();
+    Ok(ll)
+}
+
+// Histogram to probabilities function
+/// Convert a histogram to a vector of probabilities.
+///
+/// # Examples
+///
+/// ```ignore
+/// // See README for constructing GenoData and window definitions.
+/// let probs = xpclrs::methods::hist_to_probs(hist, Some(1e-10)).unwrap();
+/// ```
+fn hist_to_probs(hist: &[usize], epsilon: Option<f64>) -> Result<Vec<f64>> {
+    let epsilon = epsilon.unwrap_or(1e-10); // small value to avoid zero probabilities
+    let sfs_sum_global = hist.iter().sum::<usize>();
+    Ok(hist
+        .iter()
+        .map(|&k| {
+            if k == 0_usize {
+                epsilon
+            } else if k == sfs_sum_global {
+                1.0_f64 - epsilon
+            } else {
+                (k as f64) / (sfs_sum_global as f64)
+            }
+        })
+        .collect()
+    )
+}
+
+
+// Main CLR caller
+/// Compute CLR scores for the provided windows.
+///
+/// # Examples
+///
+/// ```ignore
+/// // See README for constructing GenoData and window definitions.
+/// let results = xpclrs::methods::clr(g_data, windows, None, 200, 10, None, None).unwrap();
+/// ```
+pub fn clr(
+    g_data: GenoData,
+    windows: Vec<(usize, usize)>, // Windows
+    maxsnps: usize,
+    minsnps: usize, // Size/count filters
+    phased: Option<bool>,
+) -> Result<Vec<(usize, XPCLRResult)>> {
+    let gt1 = g_data.gt1;
+    // Get the allele frequencies first
+    // (ar, t1, a1, q1, _t2, _a2, q2)
+    // (total_counts1, alt_counts1, alt_freqs1, alt_freqs2)
+    let af_data: AlleleFreqs = gt_to_af(&gt1, phased).expect("Failed to compute the AF for pop 1");
+
+    // Build histogram of frequencies
+    let max_c = gt1[0].len() * 2_usize; // max count per site (2 for diploid dosages, 1 for haplotypes)
+    let mut hist = vec![0_usize; max_c];
+    for &alt_count in &af_data.alt_counts1 {
+        hist[(alt_count - 1) as usize] += 1;
+    }
+
+    // Define neutral probabilities
+    let neutral_probs: Vec<f64> = hist_to_probs(&hist, Some(1e-10)).expect("Cannot compute the neutral probabilities");
+
+    // Process each window
+    let mut results: Vec<(usize, XPCLRResult)> = windows
+        // Parallellize by window
+        .par_iter()
+        .enumerate()
+        .map(|(n, (start, stop))| {
+            let (ix, n_avail) = get_window(&g_data.positions, *start, *stop, maxsnps).expect("Cannot find the window");
+            let n_snps = ix.len();
+            let max_ix = ix.iter().last().unwrap_or(&0_usize).to_owned();
+            log::debug!("xpclr Window idx: {n}; Window BP interval: {start}-{stop}; N SNPs selected: {n_snps}; N SNP available: {n_avail}");
+            if n_snps < minsnps {
+                let xpclr_win_res = XPCLRResult{
+                    window: (*start, *stop, *start, *stop, n_snps, n_avail),
+                    ll_sel: f64::NAN,
+                    ll_neut: f64::NAN,
+                    sel_coeff: f64::NAN,
+                    xpclr: f64::NAN,
+                };
+                (n, xpclr_win_res)
+            } else {
+                let bpi = g_data.positions[ix[0]] + 1;
+                let bpe = g_data.positions[max_ix] + 1;
+                // Do not clone, just refer to them (gt2 holds haplotypes when phased, dosages otherwise)
+                let a1_range  =
+                    ix.iter().map(|&i| af_data.alt_counts1[i]).collect::<Vec<u64>>();
+
+                // Define neutral lh
+                let lh0 = log_likelihood(&a1_range, &neutral_probs).expect("Cannot compute the neutral likelihood");
+
+                // Local histogram
+                let mut local_hist = vec![0_usize; max_c];
+                for &alt_count in &a1_range {
+                    local_hist[(alt_count - 1) as usize] += 1;
+                }
+
+                // Local probabilities
+                let local_probs: Vec<f64> = hist_to_probs(&local_hist, Some(1e-10)).expect("Cannot compute the local probabilities");
+                
+                // Local lh
+                let lh1 = log_likelihood(&a1_range, &local_probs).expect("Cannot compute the local likelihood");
+
+                // Compute CLR
+                let clr = 2.0_f64 * (lh1 - lh0);
+
+                // Return results
+                let xpclr_win_res = XPCLRResult{
+                    window: (*start, *stop, bpi, bpe, n_snps, n_avail),
+                    ll_sel: lh1,
+                    ll_neut: lh0,
+                    sel_coeff: f64::NAN, // Not computed for CLR
+                    xpclr: clr,
                 };
                 (n, xpclr_win_res)
             }
