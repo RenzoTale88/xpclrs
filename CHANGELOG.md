@@ -6,7 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [1.1.0] - 2026-YY-YY
-* Add `clrs` to compute composite likelihood ratio 
+* Add `clrs` to compute composite likelihood ratio
+* Add `combine_xpclrs` to combine and normalize multiple outputs
 
 ## [1.0.3] - 2026-05-06
 * Tweak GitHub actions
