@@ -2,7 +2,7 @@ use clap::{builder::PossibleValue, value_parser, Arg, ArgAction, Command};
 use env_logger::{self, Env};
 use rayon::current_num_threads;
 use xpclrs::{
-    io::{process_plink, process_xcf, read_file, to_table, write_table},
+    io::{process_plink, process_xcf, read_file, to_table, table_writer},
     methods::clr,
 };
 
@@ -277,7 +277,7 @@ fn main() {
             .expect("Failed running the CLR function");
         // Write output
         log::info!("Writing output file to {out_path}...");
-        let mut clr_tsv = write_table(&format!("{out_path}.{chrom}.clr"));
+        let mut clr_tsv = table_writer(&format!("{out_path}.{chrom}.clr"));
         let _ = to_table(&chrom, &clr_res, &mut clr_tsv, &out_fmt, false);
     });
 

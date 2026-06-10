@@ -235,9 +235,9 @@ pub fn process_plink(
 /// # Examples
 ///
 /// ```ignore
-/// let mut w = xpclrs::io::write_table("out.tsv");
+/// let mut w = xpclrs::io::table_writer("out.tsv");
 /// ```
-pub fn write_table(filename: &str) -> Box<dyn Write> {
+pub fn table_writer(filename: &str) -> Box<dyn Write> {
     let path = Path::new(filename);
     let file = File::create(path)
         .unwrap_or_else(|why| panic!("couldn't open {}: {}", path.display(), why));
